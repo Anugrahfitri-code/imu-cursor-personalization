@@ -100,3 +100,8 @@ participant_data/
 # ----------------------------
 *.swp
 *.swo
+
+# PC runtime data
+pc/receiver/logs/
+.pytest_cache/
+**/__pycache__/

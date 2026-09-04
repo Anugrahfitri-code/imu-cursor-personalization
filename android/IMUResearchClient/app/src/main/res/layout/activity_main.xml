@@ -16,7 +16,7 @@
             android:id="@+id/txtTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="IMU Research Logger"
+            android:text="IMU Research Client"
             android:textSize="24sp"
             android:textStyle="bold"/>
 
@@ -50,6 +50,46 @@
             android:layout_marginTop="4dp"
             android:text="Gyroscope: -"/>
 
+        <!-- ================================================= -->
+        <!-- NETWORK -->
+        <!-- ================================================= -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="PC Receiver"
+            android:textStyle="bold"/>
+
+        <EditText
+            android:id="@+id/editPcIp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="PC IPv4 Address"
+            android:inputType="text"
+            android:singleLine="true"
+            android:text="172.22.251.69"/>
+
+        <EditText
+            android:id="@+id/editPcPort"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="UDP Port"
+            android:inputType="number"
+            android:singleLine="true"
+            android:text="5005"/>
+
+        <TextView
+            android:id="@+id/txtNetwork"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Network: IDLE"/>
+
+        <!-- ================================================= -->
+        <!-- RECORDING -->
+        <!-- ================================================= -->
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -61,7 +101,7 @@
             android:id="@+id/editRecordName"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="contoh: stationary_01"
+            android:hint="contoh: m2_udp_test_01"
             android:inputType="text"
             android:maxLength="60"
             android:singleLine="true"/>
@@ -74,12 +114,20 @@
             android:text="Total: 0&#10;ACC: 0&#10;GYRO: 0"
             android:textSize="16sp"/>
 
+        <TextView
+            android:id="@+id/txtNetworkCount"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="UDP sent: 0&#10;Queue drops: 0&#10;Send errors: 0"
+            android:textSize="16sp"/>
+
         <Button
             android:id="@+id/btnStart"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
-            android:text="START RECORDING"/>
+            android:text="START RECORDING + STREAMING"/>
 
         <Button
             android:id="@+id/btnStop"
@@ -87,7 +135,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:enabled="false"
-            android:text="STOP RECORDING"/>
+            android:text="STOP"/>
 
         <Button
             android:id="@+id/btnDeleteLast"
@@ -95,7 +143,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:enabled="false"
-            android:text="DELETE LAST SESSION"/>
+            android:text="DELETE LAST LOCAL SESSION"/>
 
         <TextView
             android:id="@+id/txtFile"
@@ -110,6 +158,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
+            android:paddingBottom="24dp"
             android:text="Last session: -"
             android:textIsSelectable="true"/>
 

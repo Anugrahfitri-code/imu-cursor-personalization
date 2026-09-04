@@ -28,6 +28,12 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+
+import java.nio.charset.StandardCharsets;
+
 import java.text.SimpleDateFormat;
 
 import java.util.Date;
@@ -41,16 +47,35 @@ public class MainActivity extends AppCompatActivity
         implements SensorEventListener {
 
     // =========================================================
-    // GENERAL CONFIGURATION
+    // GENERAL
     // =========================================================
 
     private static final String TAG = "IMU_RESEARCH";
 
     /*
-     * 10,000 microseconds = 10 ms
-     * nominal request ~= 100 Hz
+     * Nominal sampling request:
+     * 10 ms = 100 Hz.
      */
     private static final int SAMPLING_PERIOD_US = 10000;
+
+    /*
+     * Versioned UDP protocol.
+     *
+     * DATA,1,...
+     *
+     * Prefix DATA memungkinkan kita menambahkan
+     * SYNC packets pada M2.3 tanpa merusak format DATA.
+     */
+    private static final int UDP_PROTOCOL_VERSION = 1;
+
+    /*
+     * Capacity besar tetapi bounded.
+     *
+     * Kalau network tidak mampu mengikuti acquisition,
+     * kita mencatat local queue drop secara eksplisit
+     * daripada membiarkan memory bertambah tanpa batas.
+     */
+    private static final int NETWORK_QUEUE_CAPACITY = 10000;
 
 
     // =========================================================
@@ -67,53 +92,65 @@ public class MainActivity extends AppCompatActivity
     // SENSOR THREAD
     // =========================================================
 
-    /*
-     * Sensor callback dibuat pada thread khusus,
-     * bukan pada main/UI thread.
-     */
     private HandlerThread sensorThread;
     private Handler sensorHandler;
 
 
     // =========================================================
-    // WRITER THREAD
+    // LOCAL WRITER
     // =========================================================
 
-    /*
-     * Sensor callback hanya memasukkan String row
-     * ke queue.
-     *
-     * Disk I/O dilakukan pada writerThread terpisah.
-     */
     private final LinkedBlockingQueue<String> writeQueue =
             new LinkedBlockingQueue<>();
 
     private Thread writerThread;
 
-    private volatile boolean recording = false;
     private volatile boolean writerRunning = false;
-
-
-    // =========================================================
-    // FILE
-    // =========================================================
 
     private BufferedWriter writer;
 
-    private File currentFile;
-    private File metadataFile;
 
-    private String sessionId;
-    private String recordName;
+    // =========================================================
+    // NETWORK
+    // =========================================================
+
+    private final LinkedBlockingQueue<NetworkSample> networkQueue =
+            new LinkedBlockingQueue<>(
+                    NETWORK_QUEUE_CAPACITY
+            );
+
+    private Thread networkThread;
+
+    private volatile boolean networkRunning = false;
+    private volatile boolean networkReady = false;
+
+    private DatagramSocket udpSocket;
+
+    private InetAddress pcAddress;
+    private int pcPort;
+
+    private String pcIpString;
+
+    private long networkPacketsSent = 0;
+    private long networkQueueDrops = 0;
+    private long networkSendErrors = 0;
 
 
     // =========================================================
-    // SEQUENCE COUNTERS
+    // RECORDING
     // =========================================================
+
+    private volatile boolean recording = false;
 
     private long globalSeq = 0;
     private long accelSeq = 0;
     private long gyroSeq = 0;
+
+    private String sessionId;
+    private String recordName;
+
+    private File currentFile;
+    private File metadataFile;
 
 
     // =========================================================
@@ -124,15 +161,81 @@ public class MainActivity extends AppCompatActivity
     private TextView txtDevice;
     private TextView txtAccel;
     private TextView txtGyro;
+
+    private TextView txtNetwork;
+
     private TextView txtCount;
+    private TextView txtNetworkCount;
+
     private TextView txtFile;
     private TextView txtLastSession;
 
     private EditText editRecordName;
 
+    private EditText editPcIp;
+    private EditText editPcPort;
+
     private Button btnStart;
     private Button btnStop;
     private Button btnDeleteLast;
+
+
+    // =========================================================
+    // NETWORK SAMPLE
+    // =========================================================
+
+    private static class NetworkSample {
+
+        final String sessionId;
+        final String recordName;
+
+        final long seqGlobal;
+        final long seqSensor;
+
+        final String sensorType;
+
+        final long sensorTimestampNs;
+        final long callbackElapsedNs;
+
+        final float x;
+        final float y;
+        final float z;
+
+        final int accuracy;
+
+
+        NetworkSample(
+                String sessionId,
+                String recordName,
+                long seqGlobal,
+                long seqSensor,
+                String sensorType,
+                long sensorTimestampNs,
+                long callbackElapsedNs,
+                float x,
+                float y,
+                float z,
+                int accuracy
+        ) {
+
+            this.sessionId = sessionId;
+            this.recordName = recordName;
+
+            this.seqGlobal = seqGlobal;
+            this.seqSensor = seqSensor;
+
+            this.sensorType = sensorType;
+
+            this.sensorTimestampNs = sensorTimestampNs;
+            this.callbackElapsedNs = callbackElapsedNs;
+
+            this.x = x;
+            this.y = y;
+            this.z = z;
+
+            this.accuracy = accuracy;
+        }
+    }
 
 
     // =========================================================
@@ -144,54 +247,100 @@ public class MainActivity extends AppCompatActivity
 
         super.onCreate(savedInstanceState);
 
-        setContentView(R.layout.activity_main);
+        setContentView(
+                R.layout.activity_main
+        );
 
 
         // -----------------------------------------------------
-        // Bind UI
+        // UI bindings
         // -----------------------------------------------------
 
         txtStatus =
-                findViewById(R.id.txtStatus);
+                findViewById(
+                        R.id.txtStatus
+                );
 
         txtDevice =
-                findViewById(R.id.txtDevice);
+                findViewById(
+                        R.id.txtDevice
+                );
 
         txtAccel =
-                findViewById(R.id.txtAccel);
+                findViewById(
+                        R.id.txtAccel
+                );
 
         txtGyro =
-                findViewById(R.id.txtGyro);
+                findViewById(
+                        R.id.txtGyro
+                );
+
+        txtNetwork =
+                findViewById(
+                        R.id.txtNetwork
+                );
 
         txtCount =
-                findViewById(R.id.txtCount);
+                findViewById(
+                        R.id.txtCount
+                );
+
+        txtNetworkCount =
+                findViewById(
+                        R.id.txtNetworkCount
+                );
 
         txtFile =
-                findViewById(R.id.txtFile);
+                findViewById(
+                        R.id.txtFile
+                );
 
         txtLastSession =
-                findViewById(R.id.txtLastSession);
+                findViewById(
+                        R.id.txtLastSession
+                );
 
         editRecordName =
-                findViewById(R.id.editRecordName);
+                findViewById(
+                        R.id.editRecordName
+                );
+
+        editPcIp =
+                findViewById(
+                        R.id.editPcIp
+                );
+
+        editPcPort =
+                findViewById(
+                        R.id.editPcPort
+                );
 
         btnStart =
-                findViewById(R.id.btnStart);
+                findViewById(
+                        R.id.btnStart
+                );
 
         btnStop =
-                findViewById(R.id.btnStop);
+                findViewById(
+                        R.id.btnStop
+                );
 
         btnDeleteLast =
-                findViewById(R.id.btnDeleteLast);
+                findViewById(
+                        R.id.btnDeleteLast
+                );
 
 
         // -----------------------------------------------------
-        // Sensor manager
+        // Sensors
         // -----------------------------------------------------
 
         sensorManager =
                 (SensorManager)
-                        getSystemService(SENSOR_SERVICE);
+                        getSystemService(
+                                SENSOR_SERVICE
+                        );
 
 
         accelerometer =
@@ -207,7 +356,7 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Device information
+        // Device UI
         // -----------------------------------------------------
 
         txtDevice.setText(
@@ -224,10 +373,6 @@ public class MainActivity extends AppCompatActivity
                         + Build.VERSION.SDK_INT
         );
 
-
-        // -----------------------------------------------------
-        // Accelerometer information
-        // -----------------------------------------------------
 
         if (accelerometer != null) {
 
@@ -247,10 +392,6 @@ public class MainActivity extends AppCompatActivity
             );
         }
 
-
-        // -----------------------------------------------------
-        // Gyroscope information
-        // -----------------------------------------------------
 
         if (gyroscope != null) {
 
@@ -272,7 +413,7 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Sensor thread
+        // Dedicated sensor thread
         // -----------------------------------------------------
 
         sensorThread =
@@ -308,11 +449,13 @@ public class MainActivity extends AppCompatActivity
         );
 
 
-        // -----------------------------------------------------
-        // Initial UI state
-        // -----------------------------------------------------
+        txtStatus.setText(
+                "READY"
+        );
 
-        txtStatus.setText("READY");
+        txtNetwork.setText(
+                "Network: IDLE"
+        );
 
         updateLastSessionUI();
         updateDeleteButtonState();
@@ -332,7 +475,7 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Sensor validation
+        // Validate sensors
         // -----------------------------------------------------
 
         if (accelerometer == null
@@ -347,17 +490,17 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Recording name validation
+        // Validate record name
         // -----------------------------------------------------
 
-        String inputName =
+        String inputRecordName =
                 editRecordName
                         .getText()
                         .toString()
                         .trim();
 
 
-        if (inputName.isEmpty()) {
+        if (inputRecordName.isEmpty()) {
 
             editRecordName.setError(
                     "Recording name wajib diisi"
@@ -371,14 +514,14 @@ public class MainActivity extends AppCompatActivity
 
         recordName =
                 sanitizeRecordName(
-                        inputName
+                        inputRecordName
                 );
 
 
         if (recordName.isEmpty()) {
 
             editRecordName.setError(
-                    "Nama recording tidak valid"
+                    "Recording name tidak valid"
             );
 
             editRecordName.requestFocus();
@@ -388,7 +531,92 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Generate session ID
+        // Validate PC IPv4
+        // -----------------------------------------------------
+
+        pcIpString =
+                editPcIp
+                        .getText()
+                        .toString()
+                        .trim();
+
+
+        if (pcIpString.isEmpty()) {
+
+            editPcIp.setError(
+                    "PC IP wajib diisi"
+            );
+
+            editPcIp.requestFocus();
+
+            return;
+        }
+
+
+        try {
+
+            pcAddress =
+                    InetAddress.getByName(
+                            pcIpString
+                    );
+
+        } catch (Exception e) {
+
+            editPcIp.setError(
+                    "IP address tidak valid"
+            );
+
+            editPcIp.requestFocus();
+
+            return;
+        }
+
+
+        // -----------------------------------------------------
+        // Validate UDP port
+        // -----------------------------------------------------
+
+        String portString =
+                editPcPort
+                        .getText()
+                        .toString()
+                        .trim();
+
+
+        try {
+
+            pcPort =
+                    Integer.parseInt(
+                            portString
+                    );
+
+        } catch (NumberFormatException e) {
+
+            editPcPort.setError(
+                    "Port tidak valid"
+            );
+
+            editPcPort.requestFocus();
+
+            return;
+        }
+
+
+        if (pcPort < 1
+                || pcPort > 65535) {
+
+            editPcPort.setError(
+                    "Port harus 1-65535"
+            );
+
+            editPcPort.requestFocus();
+
+            return;
+        }
+
+
+        // -----------------------------------------------------
+        // Create session ID
         // -----------------------------------------------------
 
         sessionId =
@@ -402,10 +630,6 @@ public class MainActivity extends AppCompatActivity
                         new Date()
                 );
 
-
-        // -----------------------------------------------------
-        // Session directory
-        // -----------------------------------------------------
 
         File directory =
                 getSessionsDirectory();
@@ -427,25 +651,11 @@ public class MainActivity extends AppCompatActivity
         }
 
 
-        // -----------------------------------------------------
-        // File suffix
-        // -----------------------------------------------------
-
-        /*
-         * Example:
-         *
-         * stationary_01_20260904_221109_906
-         */
-
         String suffix =
                 recordName
                         + "_"
                         + sessionId;
 
-
-        // -----------------------------------------------------
-        // Create files
-        // -----------------------------------------------------
 
         currentFile =
                 new File(
@@ -470,18 +680,23 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Reset counters
+        // Reset state
         // -----------------------------------------------------
 
         globalSeq = 0;
         accelSeq = 0;
         gyroSeq = 0;
 
+        networkPacketsSent = 0;
+        networkQueueDrops = 0;
+        networkSendErrors = 0;
+
         writeQueue.clear();
+        networkQueue.clear();
 
 
         // -----------------------------------------------------
-        // Create CSV writer
+        // Create local CSV
         // -----------------------------------------------------
 
         try {
@@ -527,16 +742,15 @@ public class MainActivity extends AppCompatActivity
 
 
             txtStatus.setText(
-                    "ERROR creating CSV"
+                    "ERROR creating local CSV"
             );
-
 
             return;
         }
 
 
         // -----------------------------------------------------
-        // Metadata
+        // Initial metadata
         // -----------------------------------------------------
 
         writeSessionMetadata();
@@ -562,7 +776,27 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Enable acquisition
+        // Start network thread
+        // -----------------------------------------------------
+
+        networkRunning = true;
+        networkReady = false;
+
+
+        networkThread =
+                new Thread(
+
+                        this::networkLoop,
+
+                        "IMUNetworkThread"
+                );
+
+
+        networkThread.start();
+
+
+        // -----------------------------------------------------
+        // Start acquisition
         // -----------------------------------------------------
 
         recording = true;
@@ -598,10 +832,6 @@ public class MainActivity extends AppCompatActivity
                 );
 
 
-        // -----------------------------------------------------
-        // Registration check
-        // -----------------------------------------------------
-
         if (!accelRegistered
                 || !gyroRegistered) {
 
@@ -630,56 +860,6 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Logs
-        // -----------------------------------------------------
-
-        Log.i(
-
-                TAG,
-
-                "Recording name="
-                        + recordName
-        );
-
-
-        Log.i(
-
-                TAG,
-
-                "Session ID="
-                        + sessionId
-        );
-
-
-        Log.i(
-
-                TAG,
-
-                "ACC registered="
-                        + accelRegistered
-        );
-
-
-        Log.i(
-
-                TAG,
-
-                "GYRO registered="
-                        + gyroRegistered
-        );
-
-
-        Log.i(
-
-                TAG,
-
-                "Sampling request="
-                        + SAMPLING_PERIOD_US
-                        + " us"
-        );
-
-
-        // -----------------------------------------------------
         // UI
         // -----------------------------------------------------
 
@@ -698,21 +878,57 @@ public class MainActivity extends AppCompatActivity
         );
 
 
+        txtNetworkCount.setText(
+
+                "UDP sent: 0"
+                        + "\nQueue drops: 0"
+                        + "\nSend errors: 0"
+        );
+
+
+        txtNetwork.setText(
+
+                "Network: STARTING"
+                        + "\n"
+                        + pcIpString
+                        + ":"
+                        + pcPort
+        );
+
+
         txtFile.setText(
 
-                "File:\n"
+                "Local file:\n"
                         + currentFile
                         .getAbsolutePath()
         );
 
 
         editRecordName.setEnabled(false);
+        editPcIp.setEnabled(false);
+        editPcPort.setEnabled(false);
 
         btnStart.setEnabled(false);
-
         btnStop.setEnabled(true);
-
         btnDeleteLast.setEnabled(false);
+
+
+        Log.i(
+
+                TAG,
+
+                "Session started"
+                        + " name="
+                        + recordName
+
+                        + " session="
+                        + sessionId
+
+                        + " target="
+                        + pcIpString
+                        + ":"
+                        + pcPort
+        );
     }
 
 
@@ -722,8 +938,8 @@ public class MainActivity extends AppCompatActivity
 
     @Override
     public void onSensorChanged(
-            SensorEvent event) {
-
+            SensorEvent event
+    ) {
 
         if (!recording) {
 
@@ -731,25 +947,14 @@ public class MainActivity extends AppCompatActivity
         }
 
 
-        // -----------------------------------------------------
-        // Callback timestamp
-        // -----------------------------------------------------
-
         long callbackElapsedNs =
                 SystemClock
                         .elapsedRealtimeNanos();
 
 
-        /*
-         * Primary hardware-related timestamp.
-         */
         long sensorTimestampNs =
                 event.timestamp;
 
-
-        // -----------------------------------------------------
-        // Sensor identification
-        // -----------------------------------------------------
 
         String sensorType;
 
@@ -788,16 +993,8 @@ public class MainActivity extends AppCompatActivity
         }
 
 
-        // -----------------------------------------------------
-        // Global sequence
-        // -----------------------------------------------------
-
         globalSeq++;
 
-
-        // -----------------------------------------------------
-        // Sensor values
-        // -----------------------------------------------------
 
         float x =
                 event.values[0];
@@ -810,10 +1007,10 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // CSV row
+        // LOCAL LOGGER
         // -----------------------------------------------------
 
-        String row =
+        String localRow =
 
                 sessionId
                         + ","
@@ -850,17 +1047,51 @@ public class MainActivity extends AppCompatActivity
                         + "\n";
 
 
-        // -----------------------------------------------------
-        // Queue only
-        // -----------------------------------------------------
-
         writeQueue.offer(
-                row
+                localRow
         );
 
 
         // -----------------------------------------------------
-        // UI update
+        // NETWORK QUEUE
+        // -----------------------------------------------------
+
+        NetworkSample networkSample =
+                new NetworkSample(
+
+                        sessionId,
+                        recordName,
+
+                        globalSeq,
+                        sensorSeq,
+
+                        sensorType,
+
+                        sensorTimestampNs,
+                        callbackElapsedNs,
+
+                        x,
+                        y,
+                        z,
+
+                        event.accuracy
+                );
+
+
+        boolean queued =
+                networkQueue.offer(
+                        networkSample
+                );
+
+
+        if (!queued) {
+
+            networkQueueDrops++;
+        }
+
+
+        // -----------------------------------------------------
+        // UI counters
         // -----------------------------------------------------
 
         if (globalSeq % 200 == 0) {
@@ -869,35 +1100,55 @@ public class MainActivity extends AppCompatActivity
             long total =
                     globalSeq;
 
-
             long acc =
                     accelSeq;
-
 
             long gyro =
                     gyroSeq;
 
+            long sent =
+                    networkPacketsSent;
 
-            runOnUiThread(() ->
+            long dropped =
+                    networkQueueDrops;
 
-                    txtCount.setText(
+            long errors =
+                    networkSendErrors;
 
-                            "Total: "
-                                    + total
 
-                                    + "\nACC: "
-                                    + acc
+            runOnUiThread(() -> {
 
-                                    + "\nGYRO: "
-                                    + gyro
-                    )
-            );
+                txtCount.setText(
+
+                        "Total: "
+                                + total
+
+                                + "\nACC: "
+                                + acc
+
+                                + "\nGYRO: "
+                                + gyro
+                );
+
+
+                txtNetworkCount.setText(
+
+                        "UDP sent: "
+                                + sent
+
+                                + "\nQueue drops: "
+                                + dropped
+
+                                + "\nSend errors: "
+                                + errors
+                );
+            });
         }
     }
 
 
     // =========================================================
-    // WRITER LOOP
+    // LOCAL WRITER LOOP
     // =========================================================
 
     private void writerLoop() {
@@ -946,7 +1197,7 @@ public class MainActivity extends AppCompatActivity
 
                             TAG,
 
-                            "Written rows="
+                            "LOCAL written="
                                     + writtenRows
 
                                     + " queue="
@@ -966,7 +1217,7 @@ public class MainActivity extends AppCompatActivity
 
                     TAG,
 
-                    "Writer thread I/O error",
+                    "Local writer I/O error",
 
                     e
             );
@@ -983,7 +1234,7 @@ public class MainActivity extends AppCompatActivity
 
                     TAG,
 
-                    "Writer thread interrupted",
+                    "Local writer interrupted",
 
                     e
             );
@@ -992,7 +1243,252 @@ public class MainActivity extends AppCompatActivity
 
 
     // =========================================================
-    // STOP RECORDING
+    // UDP NETWORK LOOP
+    // =========================================================
+
+    private void networkLoop() {
+
+
+        try {
+
+
+            udpSocket =
+                    new DatagramSocket();
+
+
+            /*
+             * Connected UDP socket:
+             * tidak membuat TCP connection.
+             * Ini hanya menetapkan default destination.
+             */
+            udpSocket.connect(
+                    pcAddress,
+                    pcPort
+            );
+
+
+            networkReady =
+                    true;
+
+
+            runOnUiThread(() ->
+
+                    txtNetwork.setText(
+
+                            "Network: STREAMING"
+                                    + "\n"
+                                    + pcIpString
+                                    + ":"
+                                    + pcPort
+                    )
+            );
+
+
+            Log.i(
+
+                    TAG,
+
+                    "UDP socket ready -> "
+                            + pcIpString
+                            + ":"
+                            + pcPort
+            );
+
+
+            while (networkRunning
+                    || !networkQueue.isEmpty()) {
+
+
+                NetworkSample sample =
+                        networkQueue.poll(
+
+                                100,
+
+                                TimeUnit.MILLISECONDS
+                        );
+
+
+                if (sample == null) {
+
+                    continue;
+                }
+
+
+                long sendElapsedNs =
+                        SystemClock
+                                .elapsedRealtimeNanos();
+
+
+                /*
+                 * Packet schema:
+                 *
+                 * DATA
+                 * protocol_version
+                 * session_id
+                 * record_name
+                 * seq_global
+                 * seq_sensor
+                 * sensor_type
+                 * sensor_ts_phone_ns
+                 * callback_elapsed_ns
+                 * send_elapsed_ns
+                 * x
+                 * y
+                 * z
+                 * accuracy
+                 */
+
+                String message =
+
+                        "DATA,"
+                                + UDP_PROTOCOL_VERSION
+                                + ","
+
+                                + sample.sessionId
+                                + ","
+
+                                + sample.recordName
+                                + ","
+
+                                + sample.seqGlobal
+                                + ","
+
+                                + sample.seqSensor
+                                + ","
+
+                                + sample.sensorType
+                                + ","
+
+                                + sample.sensorTimestampNs
+                                + ","
+
+                                + sample.callbackElapsedNs
+                                + ","
+
+                                + sendElapsedNs
+                                + ","
+
+                                + sample.x
+                                + ","
+
+                                + sample.y
+                                + ","
+
+                                + sample.z
+                                + ","
+
+                                + sample.accuracy;
+
+
+                byte[] payload =
+                        message.getBytes(
+                                StandardCharsets.UTF_8
+                        );
+
+
+                DatagramPacket packet =
+                        new DatagramPacket(
+
+                                payload,
+
+                                payload.length
+                        );
+
+
+                try {
+
+
+                    udpSocket.send(
+                            packet
+                    );
+
+
+                    networkPacketsSent++;
+
+
+                } catch (IOException e) {
+
+
+                    networkSendErrors++;
+
+
+                    Log.e(
+
+                            TAG,
+
+                            "UDP send error",
+
+                            e
+                    );
+                }
+            }
+
+
+        } catch (Exception e) {
+
+
+            networkReady =
+                    false;
+
+
+            networkSendErrors++;
+
+
+            Log.e(
+
+                    TAG,
+
+                    "UDP network initialization error",
+
+                    e
+            );
+
+
+            runOnUiThread(() ->
+
+                    txtNetwork.setText(
+                            "Network: ERROR"
+                    )
+            );
+
+
+        } finally {
+
+
+            networkReady =
+                    false;
+
+
+            if (udpSocket != null) {
+
+
+                udpSocket.close();
+
+                udpSocket =
+                        null;
+            }
+
+
+            Log.i(
+
+                    TAG,
+
+                    "UDP thread stopped"
+                            + " sent="
+                            + networkPacketsSent
+
+                            + " queueDrops="
+                            + networkQueueDrops
+
+                            + " sendErrors="
+                            + networkSendErrors
+            );
+        }
+    }
+
+
+    // =========================================================
+    // STOP
     // =========================================================
 
     private void stopRecording() {
@@ -1005,10 +1501,11 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Stop acquisition
+        // Stop sensor source first
         // -----------------------------------------------------
 
-        recording = false;
+        recording =
+                false;
 
 
         sensorManager.unregisterListener(
@@ -1017,10 +1514,11 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Stop writer AFTER queue emptied
+        // Drain local writer queue
         // -----------------------------------------------------
 
-        writerRunning = false;
+        writerRunning =
+                false;
 
 
         if (writerThread != null) {
@@ -1034,9 +1532,7 @@ public class MainActivity extends AppCompatActivity
                 );
 
 
-            } catch (
-                    InterruptedException e
-            ) {
+            } catch (InterruptedException e) {
 
 
                 Thread.currentThread()
@@ -1046,7 +1542,35 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Close file
+        // Drain network queue
+        // -----------------------------------------------------
+
+        networkRunning =
+                false;
+
+
+        if (networkThread != null) {
+
+
+            try {
+
+
+                networkThread.join(
+                        5000
+                );
+
+
+            } catch (InterruptedException e) {
+
+
+                Thread.currentThread()
+                        .interrupt();
+            }
+        }
+
+
+        // -----------------------------------------------------
+        // Close local CSV
         // -----------------------------------------------------
 
         try {
@@ -1059,7 +1583,8 @@ public class MainActivity extends AppCompatActivity
 
                 writer.close();
 
-                writer = null;
+                writer =
+                        null;
             }
 
 
@@ -1070,7 +1595,7 @@ public class MainActivity extends AppCompatActivity
 
                     TAG,
 
-                    "Error closing CSV",
+                    "Error closing local CSV",
 
                     e
             );
@@ -1078,7 +1603,14 @@ public class MainActivity extends AppCompatActivity
 
 
         // -----------------------------------------------------
-        // Save values before reset
+        // Append final metadata
+        // -----------------------------------------------------
+
+        appendFinalMetadata();
+
+
+        // -----------------------------------------------------
+        // Freeze counters for UI
         // -----------------------------------------------------
 
         long finalGlobal =
@@ -1091,6 +1623,18 @@ public class MainActivity extends AppCompatActivity
 
         long finalGyro =
                 gyroSeq;
+
+
+        long finalSent =
+                networkPacketsSent;
+
+
+        long finalQueueDrops =
+                networkQueueDrops;
+
+
+        long finalSendErrors =
+                networkSendErrors;
 
 
         String finishedName =
@@ -1108,6 +1652,12 @@ public class MainActivity extends AppCompatActivity
         );
 
 
+        txtNetwork.setText(
+
+                "Network: STOPPED"
+        );
+
+
         txtCount.setText(
 
                 "Total: "
@@ -1121,27 +1671,49 @@ public class MainActivity extends AppCompatActivity
         );
 
 
-        editRecordName.setEnabled(true);
+        txtNetworkCount.setText(
 
-        editRecordName.setText("");
+                "UDP sent: "
+                        + finalSent
 
-        btnStart.setEnabled(true);
+                        + "\nQueue drops: "
+                        + finalQueueDrops
 
-        btnStop.setEnabled(false);
+                        + "\nSend errors: "
+                        + finalSendErrors
+        );
 
 
-        // -----------------------------------------------------
-        // Update last session
-        // -----------------------------------------------------
+        editRecordName.setEnabled(
+                true
+        );
+
+        editPcIp.setEnabled(
+                true
+        );
+
+        editPcPort.setEnabled(
+                true
+        );
+
+
+        editRecordName.setText(
+                ""
+        );
+
+
+        btnStart.setEnabled(
+                true
+        );
+
+        btnStop.setEnabled(
+                false
+        );
+
 
         updateLastSessionUI();
-
         updateDeleteButtonState();
 
-
-        // -----------------------------------------------------
-        // Log
-        // -----------------------------------------------------
 
         Log.i(
 
@@ -1151,7 +1723,7 @@ public class MainActivity extends AppCompatActivity
                         + " name="
                         + finishedName
 
-                        + " Total="
+                        + " total="
                         + finalGlobal
 
                         + " ACC="
@@ -1160,8 +1732,20 @@ public class MainActivity extends AppCompatActivity
                         + " GYRO="
                         + finalGyro
 
-                        + " remainingQueue="
+                        + " localQueue="
                         + writeQueue.size()
+
+                        + " UDPsent="
+                        + finalSent
+
+                        + " networkQueue="
+                        + networkQueue.size()
+
+                        + " networkQueueDrops="
+                        + finalQueueDrops
+
+                        + " sendErrors="
+                        + finalSendErrors
         );
 
 
@@ -1169,7 +1753,7 @@ public class MainActivity extends AppCompatActivity
 
                 this,
 
-                "Recording tersimpan: "
+                "Session tersimpan: "
                         + finishedName,
 
                 Toast.LENGTH_SHORT
@@ -1179,7 +1763,7 @@ public class MainActivity extends AppCompatActivity
 
 
     // =========================================================
-    // SESSION METADATA
+    // INITIAL METADATA
     // =========================================================
 
     private void writeSessionMetadata() {
@@ -1203,7 +1787,6 @@ public class MainActivity extends AppCompatActivity
 
 
             metadataWriter.write(
-
                     "session_id="
                             + sessionId
                             + "\n"
@@ -1211,7 +1794,6 @@ public class MainActivity extends AppCompatActivity
 
 
             metadataWriter.write(
-
                     "record_name="
                             + recordName
                             + "\n"
@@ -1219,7 +1801,6 @@ public class MainActivity extends AppCompatActivity
 
 
             metadataWriter.write(
-
                     "manufacturer="
                             + Build.MANUFACTURER
                             + "\n"
@@ -1227,7 +1808,6 @@ public class MainActivity extends AppCompatActivity
 
 
             metadataWriter.write(
-
                     "model="
                             + Build.MODEL
                             + "\n"
@@ -1235,7 +1815,6 @@ public class MainActivity extends AppCompatActivity
 
 
             metadataWriter.write(
-
                     "android_version="
                             + Build.VERSION.RELEASE
                             + "\n"
@@ -1243,7 +1822,6 @@ public class MainActivity extends AppCompatActivity
 
 
             metadataWriter.write(
-
                     "api_level="
                             + Build.VERSION.SDK_INT
                             + "\n"
@@ -1251,7 +1829,6 @@ public class MainActivity extends AppCompatActivity
 
 
             metadataWriter.write(
-
                     "requested_sampling_us="
                             + SAMPLING_PERIOD_US
                             + "\n"
@@ -1259,7 +1836,6 @@ public class MainActivity extends AppCompatActivity
 
 
             metadataWriter.write(
-
                     "requested_sampling_hz="
                             + (
                             1_000_000.0
@@ -1270,132 +1846,120 @@ public class MainActivity extends AppCompatActivity
 
 
             metadataWriter.write(
-
                     "session_start_elapsed_ns="
                             + startElapsedNs
                             + "\n"
             );
 
 
-            // -------------------------------------------------
-            // Accelerometer metadata
-            // -------------------------------------------------
+            metadataWriter.write(
+                    "udp_protocol_version="
+                            + UDP_PROTOCOL_VERSION
+                            + "\n"
+            );
+
+
+            metadataWriter.write(
+                    "udp_target_ip="
+                            + pcIpString
+                            + "\n"
+            );
+
+
+            metadataWriter.write(
+                    "udp_target_port="
+                            + pcPort
+                            + "\n"
+            );
+
 
             if (accelerometer != null) {
 
 
                 metadataWriter.write(
-
                         "accelerometer_name="
-                                + accelerometer
-                                .getName()
+                                + accelerometer.getName()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "accelerometer_vendor="
-                                + accelerometer
-                                .getVendor()
+                                + accelerometer.getVendor()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "accelerometer_version="
-                                + accelerometer
-                                .getVersion()
+                                + accelerometer.getVersion()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "accelerometer_resolution="
-                                + accelerometer
-                                .getResolution()
+                                + accelerometer.getResolution()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "accelerometer_max_range="
-                                + accelerometer
-                                .getMaximumRange()
+                                + accelerometer.getMaximumRange()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "accelerometer_min_delay_us="
-                                + accelerometer
-                                .getMinDelay()
+                                + accelerometer.getMinDelay()
                                 + "\n"
                 );
             }
 
 
-            // -------------------------------------------------
-            // Gyroscope metadata
-            // -------------------------------------------------
-
             if (gyroscope != null) {
 
 
                 metadataWriter.write(
-
                         "gyroscope_name="
-                                + gyroscope
-                                .getName()
+                                + gyroscope.getName()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "gyroscope_vendor="
-                                + gyroscope
-                                .getVendor()
+                                + gyroscope.getVendor()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "gyroscope_version="
-                                + gyroscope
-                                .getVersion()
+                                + gyroscope.getVersion()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "gyroscope_resolution="
-                                + gyroscope
-                                .getResolution()
+                                + gyroscope.getResolution()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "gyroscope_max_range="
-                                + gyroscope
-                                .getMaximumRange()
+                                + gyroscope.getMaximumRange()
                                 + "\n"
                 );
 
 
                 metadataWriter.write(
-
                         "gyroscope_min_delay_us="
-                                + gyroscope
-                                .getMinDelay()
+                                + gyroscope.getMinDelay()
                                 + "\n"
                 );
             }
@@ -1417,11 +1981,111 @@ public class MainActivity extends AppCompatActivity
 
 
     // =========================================================
+    // FINAL METADATA
+    // =========================================================
+
+    private void appendFinalMetadata() {
+
+
+        if (metadataFile == null) {
+
+            return;
+        }
+
+
+        try (
+                BufferedWriter metadataWriter =
+
+                        new BufferedWriter(
+
+                                new FileWriter(
+
+                                        metadataFile,
+
+                                        true
+                                )
+                        )
+        ) {
+
+
+            metadataWriter.write(
+                    "final_total_samples="
+                            + globalSeq
+                            + "\n"
+            );
+
+
+            metadataWriter.write(
+                    "final_acc_samples="
+                            + accelSeq
+                            + "\n"
+            );
+
+
+            metadataWriter.write(
+                    "final_gyro_samples="
+                            + gyroSeq
+                            + "\n"
+            );
+
+
+            metadataWriter.write(
+                    "final_udp_packets_sent="
+                            + networkPacketsSent
+                            + "\n"
+            );
+
+
+            metadataWriter.write(
+                    "final_network_queue_drops="
+                            + networkQueueDrops
+                            + "\n"
+            );
+
+
+            metadataWriter.write(
+                    "final_udp_send_errors="
+                            + networkSendErrors
+                            + "\n"
+            );
+
+
+            metadataWriter.write(
+                    "final_local_queue_remaining="
+                            + writeQueue.size()
+                            + "\n"
+            );
+
+
+            metadataWriter.write(
+                    "final_network_queue_remaining="
+                            + networkQueue.size()
+                            + "\n"
+            );
+
+
+        } catch (IOException e) {
+
+
+            Log.e(
+
+                    TAG,
+
+                    "Cannot append final metadata",
+
+                    e
+            );
+        }
+    }
+
+
+    // =========================================================
     // RECORD NAME SANITIZATION
     // =========================================================
 
     private String sanitizeRecordName(
-            String input) {
+            String input
+    ) {
 
 
         String cleaned =
@@ -1432,9 +2096,6 @@ public class MainActivity extends AppCompatActivity
                         );
 
 
-        /*
-         * Spaces become underscore.
-         */
         cleaned =
                 cleaned.replaceAll(
                         "\\s+",
@@ -1442,13 +2103,6 @@ public class MainActivity extends AppCompatActivity
                 );
 
 
-        /*
-         * Keep only:
-         * a-z
-         * 0-9
-         * _
-         * -
-         */
         cleaned =
                 cleaned.replaceAll(
                         "[^a-z0-9_-]",
@@ -1456,9 +2110,6 @@ public class MainActivity extends AppCompatActivity
                 );
 
 
-        /*
-         * Avoid many underscores.
-         */
         cleaned =
                 cleaned.replaceAll(
                         "_+",
@@ -1479,7 +2130,9 @@ public class MainActivity extends AppCompatActivity
 
         return new File(
 
-                getExternalFilesDir(null),
+                getExternalFilesDir(
+                        null
+                ),
 
                 "sessions"
         );
@@ -1487,7 +2140,7 @@ public class MainActivity extends AppCompatActivity
 
 
     // =========================================================
-    // FIND LAST IMU FILE
+    // FIND LATEST LOCAL IMU FILE
     // =========================================================
 
     private File findLatestImuFile() {
@@ -1525,8 +2178,12 @@ public class MainActivity extends AppCompatActivity
                     file.getName();
 
 
-            if (!name.startsWith("imu_")
-                    || !name.endsWith(".csv")) {
+            if (!name.startsWith(
+                    "imu_"
+            )
+                    || !name.endsWith(
+                    ".csv"
+            )) {
 
                 continue;
             }
@@ -1548,11 +2205,12 @@ public class MainActivity extends AppCompatActivity
 
 
     // =========================================================
-    // MATCHING META FILE
+    // FIND MATCHING METADATA
     // =========================================================
 
     private File findMatchingMetadataFile(
-            File imuFile) {
+            File imuFile
+    ) {
 
 
         if (imuFile == null) {
@@ -1564,14 +2222,6 @@ public class MainActivity extends AppCompatActivity
         String imuName =
                 imuFile.getName();
 
-
-        /*
-         * imu_stationary_01_XXXX.csv
-         *
-         * ->
-         *
-         * stationary_01_XXXX
-         */
 
         String suffix =
                 imuName.substring(
@@ -1595,11 +2245,12 @@ public class MainActivity extends AppCompatActivity
 
 
     // =========================================================
-    // READ RECORD NAME FROM METADATA
+    // READ RECORD NAME FROM META
     // =========================================================
 
     private String readRecordNameFromMetadata(
-            File metaFile) {
+            File metaFile
+    ) {
 
 
         if (metaFile == null
@@ -1625,7 +2276,8 @@ public class MainActivity extends AppCompatActivity
 
 
             while (
-                    (line = reader.readLine())
+                    (line =
+                            reader.readLine())
                             != null
             ) {
 
@@ -1661,7 +2313,7 @@ public class MainActivity extends AppCompatActivity
 
 
     // =========================================================
-    // DELETE BUTTON STATE
+    // UPDATE DELETE BUTTON
     // =========================================================
 
     private void updateDeleteButtonState() {
@@ -1685,18 +2337,18 @@ public class MainActivity extends AppCompatActivity
         }
 
 
-        File latestFile =
+        File latest =
                 findLatestImuFile();
 
 
         btnDeleteLast.setEnabled(
-                latestFile != null
+                latest != null
         );
     }
 
 
     // =========================================================
-    // UPDATE LAST SESSION UI
+    // UPDATE LAST SESSION
     // =========================================================
 
     private void updateLastSessionUI() {
@@ -1724,7 +2376,7 @@ public class MainActivity extends AppCompatActivity
                 );
 
 
-        String lastRecordName =
+        String lastName =
                 readRecordNameFromMetadata(
                         metaFile
                 );
@@ -1732,8 +2384,8 @@ public class MainActivity extends AppCompatActivity
 
         txtLastSession.setText(
 
-                "Last session:\n"
-                        + lastRecordName
+                "Last local session:\n"
+                        + lastName
 
                         + "\n"
 
@@ -1769,12 +2421,11 @@ public class MainActivity extends AppCompatActivity
 
 
             txtStatus.setText(
-                    "No recording available"
+                    "No local recording available"
             );
 
 
             updateDeleteButtonState();
-
 
             return;
         }
@@ -1786,7 +2437,7 @@ public class MainActivity extends AppCompatActivity
                 );
 
 
-        String lastRecordName =
+        String lastName =
                 readRecordNameFromMetadata(
                         metaFile
                 );
@@ -1797,13 +2448,13 @@ public class MainActivity extends AppCompatActivity
         )
 
                 .setTitle(
-                        "Delete Last Recording?"
+                        "Delete Last Local Recording?"
                 )
 
                 .setMessage(
 
-                        "Recording name:\n"
-                                + lastRecordName
+                        "Recording:\n"
+                                + lastName
 
                                 + "\n\nCSV:\n"
                                 + imuFile.getName()
@@ -1816,13 +2467,11 @@ public class MainActivity extends AppCompatActivity
                         )
 
                                 + "\n\n"
-                                + "File akan dihapus permanen."
+                                + "PC receiver log tidak ikut dihapus."
                 )
 
                 .setNegativeButton(
-
                         "CANCEL",
-
                         null
                 )
 
@@ -1834,7 +2483,7 @@ public class MainActivity extends AppCompatActivity
 
                                 deleteSession(
 
-                                        lastRecordName,
+                                        lastName,
 
                                         imuFile,
 
@@ -1853,7 +2502,8 @@ public class MainActivity extends AppCompatActivity
     private void deleteSession(
             String deletedRecordName,
             File imuFile,
-            File metaFile) {
+            File metaFile
+    ) {
 
 
         writeDeletionAudit(
@@ -1920,7 +2570,7 @@ public class MainActivity extends AppCompatActivity
 
                     this,
 
-                    "Recording deleted: "
+                    "Local recording deleted: "
                             + deletedRecordName,
 
                     Toast.LENGTH_SHORT
@@ -1928,40 +2578,16 @@ public class MainActivity extends AppCompatActivity
             ).show();
 
 
-            Log.i(
-
-                    TAG,
-
-                    "Session deleted: "
-                            + deletedRecordName
-            );
-
-
         } else {
 
 
             txtStatus.setText(
-
-                    "ERROR: Could not delete all files"
-            );
-
-
-            Log.e(
-
-                    TAG,
-
-                    "Delete failed."
-                            + " IMU="
-                            + imuDeleted
-
-                            + " META="
-                            + metaDeleted
+                    "ERROR deleting local files"
             );
         }
 
 
         updateLastSessionUI();
-
         updateDeleteButtonState();
     }
 
@@ -1973,7 +2599,8 @@ public class MainActivity extends AppCompatActivity
     private void writeDeletionAudit(
             String deletedRecordName,
             File imuFile,
-            File metaFile) {
+            File metaFile
+    ) {
 
 
         File directory =
@@ -2089,7 +2716,8 @@ public class MainActivity extends AppCompatActivity
     @Override
     public void onAccuracyChanged(
             Sensor sensor,
-            int accuracy) {
+            int accuracy
+    ) {
 
 
         Log.i(
@@ -2106,7 +2734,7 @@ public class MainActivity extends AppCompatActivity
 
 
     // =========================================================
-    // ACTIVITY LIFECYCLE
+    // LIFECYCLE
     // =========================================================
 
     @Override
@@ -2115,11 +2743,6 @@ public class MainActivity extends AppCompatActivity
         super.onPause();
 
 
-        /*
-         * Untuk bench logger:
-         * kalau app keluar foreground ketika recording,
-         * recording dihentikan secara aman.
-         */
         if (recording) {
 
             stopRecording();

@@ -1,0 +1,102 @@
+# ============================================================
+# IMU Cursor Research - Root .gitignore
+# ============================================================
+
+
+# ----------------------------
+# Operating System
+# ----------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+
+# ----------------------------
+# IDE
+# ----------------------------
+.idea/
+**/.idea/
+.vscode/
+*.iml
+
+
+# ----------------------------
+# Android / Gradle
+# ----------------------------
+**/.gradle/
+**/build/
+**/local.properties
+**/.cxx/
+**/.externalNativeBuild/
+**/captures/
+
+
+# ----------------------------
+# APK / Android build output
+# ----------------------------
+*.apk
+*.aab
+*.dex
+
+
+# ----------------------------
+# Python
+# ----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+
+.venv/
+venv/
+env/
+
+.ipynb_checkpoints/
+
+
+# ----------------------------
+# Logs / temp
+# ----------------------------
+*.log
+*.tmp
+*.temp
+*.bak
+
+
+# ----------------------------
+# Local research data
+# ----------------------------
+bench_data/
+archive_local/
+local_archive/
+
+data/raw/
+data/private/
+data/participants/
+participant_data/
+
+
+# ----------------------------
+# Sensitive / secret files
+# ----------------------------
+.env
+.env.*
+*.jks
+*.keystore
+*.pem
+*.p12
+*.key
+
+
+# ----------------------------
+# Archives
+# ----------------------------
+*.zip
+*.rar
+*.7z
+
+
+# ----------------------------
+# OS / application generated
+# ----------------------------
+*.swp
+*.swo

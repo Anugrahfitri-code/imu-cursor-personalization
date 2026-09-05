@@ -440,7 +440,7 @@ def test_phone_to_pc_mapping_is_monotonic_for_positive_alpha():
 
 def test_mad_multiplier_is_frozen_at_six():
     assert MAD_MULTIPLIER == 6.0
-    
+
 def test_noisy_affine_fit_uses_true_ols_with_intercept():
 
     phone0 = 50_000_000_000_000
@@ -507,8 +507,8 @@ def test_noisy_affine_fit_uses_true_ols_with_intercept():
     assert model.alpha == pytest.approx(
         expected_alpha,
         abs=1e-12,
-    )   
-    
+    )
+
 def test_r1_selector_keeps_microbursts_separate_when_first_probe_is_missing():
 
     base_phone = 50_000_000_000
@@ -656,4 +656,4 @@ def test_r1_selector_keeps_microbursts_separate_when_first_probe_is_missing():
     ] == [
         35,
         36,
-    ]     
+    ]

@@ -440,3 +440,71 @@ def test_phone_to_pc_mapping_is_monotonic_for_positive_alpha():
 
 def test_mad_multiplier_is_frozen_at_six():
     assert MAD_MULTIPLIER == 6.0
+    
+def test_noisy_affine_fit_uses_true_ols_with_intercept():
+
+    phone0 = 50_000_000_000_000
+    pc0 = 80_000_000_000_000
+
+    phone_offsets_s = [
+        0,
+        20,
+        40,
+        60,
+        120,
+    ]
+
+    pc_offsets_s = [
+        0,
+        21,
+        39,
+        62,
+        119,
+    ]
+
+    probes = []
+
+    for i, (
+        phone_offset_s,
+        pc_offset_s,
+    ) in enumerate(
+        zip(
+            phone_offsets_s,
+            pc_offsets_s,
+        )
+    ):
+
+        phone_mid_ns = (
+            phone0
+            + phone_offset_s
+            * 1_000_000_000
+        )
+
+        pc_mid_ns = (
+            pc0
+            + pc_offset_s
+            * 1_000_000_000
+        )
+
+        probes.append(
+            make_probe(
+                seq=i + 1,
+                phase="background",
+                phone_mid_ns=phone_mid_ns,
+                pc_mid_ns=pc_mid_ns,
+                delay_like_ns=1_000_000,
+            )
+        )
+
+    model = fit_robust_clock_model(
+        probes
+    )
+
+    expected_alpha = (
+        0.9919811320754717
+    )
+
+    assert model.alpha == pytest.approx(
+        expected_alpha,
+        abs=1e-12,
+    )    

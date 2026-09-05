@@ -224,7 +224,6 @@ def _fit_xy(
             "at least two observations required"
         )
 
-    # Center timestamps for numerical stability.
     x0 = median(xs)
     y0 = median(ys)
 
@@ -238,9 +237,30 @@ def _fit_xy(
         for y in ys
     ]
 
+
+    x_mean = (
+        sum(xc)
+        / len(xc)
+    )
+
+    y_mean = (
+        sum(yc)
+        / len(yc)
+    )
+
+    x_centered = [
+        x - x_mean
+        for x in xc
+    ]
+
+    y_centered = [
+        y - y_mean
+        for y in yc
+    ]
+
     denominator = sum(
         x * x
-        for x in xc
+        for x in x_centered
     )
 
     if denominator == 0:
@@ -252,22 +272,17 @@ def _fit_xy(
         sum(
             x * y
             for x, y in zip(
-                xc,
-                yc,
+                x_centered,
+                y_centered,
             )
         )
         / denominator
     )
 
+   
     centered_intercept = (
-        sum(
-            y - alpha * x
-            for x, y in zip(
-                xc,
-                yc,
-            )
-        )
-        / len(xs)
+        y_mean
+        - alpha * x_mean
     )
 
     beta = (

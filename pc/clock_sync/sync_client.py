@@ -18,7 +18,10 @@ PROBE_TIMEOUT_S = 0.25
 
 BURST_COUNT = 30
 BURST_INTERVAL_S = 0.05
-BACKGROUND_INTERVAL_S = 2.0
+
+BACKGROUND_BURST_SIZE = 5
+BACKGROUND_PROBE_INTERVAL_S = 0.05
+BACKGROUND_BURST_INTERVAL_S = 10.0
 
 def _classify_response_error(
     error: Exception,
@@ -351,11 +354,8 @@ def build_probe_schedule(
 
     schedule: list[ScheduledProbe] = []
 
-    # -----------------------------------------
-    # STARTUP BURST
-    # -----------------------------------------
-
     for index in range(BURST_COUNT):
+
         schedule.append(
             ScheduledProbe(
                 phase="startup",
@@ -371,34 +371,39 @@ def build_probe_schedule(
         * BURST_INTERVAL_S
     )
 
-    # -----------------------------------------
-    # BACKGROUND PROBES
-    # -----------------------------------------
-
-    background_count = int(
+    background_burst_count = int(
         background_duration_s
-        // BACKGROUND_INTERVAL_S
+        // BACKGROUND_BURST_INTERVAL_S
     )
 
-    for index in range(
-        background_count
+    for burst_index in range(
+        background_burst_count
     ):
-        schedule.append(
-            ScheduledProbe(
-                phase="background",
-                target_offset_s=(
-                    background_start
-                    + (
-                        index
-                        * BACKGROUND_INTERVAL_S
-                    )
-                ),
+
+        burst_start = (
+            background_start
+            + (
+                burst_index
+                * BACKGROUND_BURST_INTERVAL_S
             )
         )
 
-    # -----------------------------------------
-    # SHUTDOWN BURST
-    # -----------------------------------------
+        for probe_index in range(
+            BACKGROUND_BURST_SIZE
+        ):
+
+            schedule.append(
+                ScheduledProbe(
+                    phase="background",
+                    target_offset_s=(
+                        burst_start
+                        + (
+                            probe_index
+                            * BACKGROUND_PROBE_INTERVAL_S
+                        )
+                    ),
+                )
+            )
 
     shutdown_start = (
         background_start
@@ -406,6 +411,7 @@ def build_probe_schedule(
     )
 
     for index in range(BURST_COUNT):
+
         schedule.append(
             ScheduledProbe(
                 phase="shutdown",

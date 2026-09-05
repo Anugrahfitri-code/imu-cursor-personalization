@@ -5,7 +5,9 @@ import pc.clock_sync.sync_client as sync_client_module
 import pytest
 
 from pc.clock_sync.sync_client import (
-    BACKGROUND_INTERVAL_S,
+    BACKGROUND_BURST_INTERVAL_S,
+    BACKGROUND_BURST_SIZE,
+    BACKGROUND_PROBE_INTERVAL_S,
     BURST_COUNT,
     BURST_INTERVAL_S,
     ProbeResult,
@@ -18,9 +20,9 @@ from pc.clock_sync.sync_client import (
 )
 
 
-def test_probe_schedule_has_frozen_startup_and_shutdown_counts():
+def test_probe_schedule_uses_r1_microbursts():
     schedule = build_probe_schedule(
-        background_duration_s=10.0
+        background_duration_s=20.0
     )
 
     startup = [
@@ -41,16 +43,69 @@ def test_probe_schedule_has_frozen_startup_and_shutdown_counts():
         if item.phase == "shutdown"
     ]
 
-    assert len(startup) == BURST_COUNT == 30
-    assert len(shutdown) == BURST_COUNT == 30
+    assert len(startup) == 30
+    assert len(background) == 10
+    assert len(shutdown) == 30
 
-    # 10 s / 2 s = 5 background probes
-    assert len(background) == 5
+    background_offsets = [
+        item.target_offset_s
+        for item in background
+    ]
 
+    expected = [
+        1.50,
+        1.55,
+        1.60,
+        1.65,
+        1.70,
+        11.50,
+        11.55,
+        11.60,
+        11.65,
+        11.70,
+    ]
 
-def test_schedule_constants_are_frozen():
+    assert background_offsets == pytest.approx(
+        expected,
+        abs=1e-12,
+    )
+
+def test_r1_120s_schedule_keeps_same_probe_budget():
+    schedule = build_probe_schedule(
+        background_duration_s=120.0
+    )
+
+    startup = [
+        p
+        for p in schedule
+        if p.phase == "startup"
+    ]
+
+    background = [
+        p
+        for p in schedule
+        if p.phase == "background"
+    ]
+
+    shutdown = [
+        p
+        for p in schedule
+        if p.phase == "shutdown"
+    ]
+
+    assert len(startup) == 30
+    assert len(background) == 60
+    assert len(shutdown) == 30
+
+    assert len(schedule) == 120
+
+def test_r1_background_microburst_constants_are_frozen():
+    assert BURST_COUNT == 30
     assert BURST_INTERVAL_S == 0.05
-    assert BACKGROUND_INTERVAL_S == 2.0
+
+    assert BACKGROUND_BURST_SIZE == 5
+    assert BACKGROUND_PROBE_INTERVAL_S == 0.05
+    assert BACKGROUND_BURST_INTERVAL_S == 10.0
 
 
 def test_schedule_offsets_are_monotonic():

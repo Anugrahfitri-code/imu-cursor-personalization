@@ -5,6 +5,10 @@ from math import isfinite
 from statistics import median
 from typing import Iterable
 
+from pc.clock_sync.sync_client import (
+    BACKGROUND_BURST_SIZE,
+    BURST_COUNT,
+)
 
 MAD_MULTIPLIER = 6.0
 DEFAULT_BLOCK_NS = 10_000_000_000
@@ -167,20 +171,86 @@ def select_low_delay_background(
 
     valid = sorted(
         _valid_background(probes),
-        key=lambda probe: probe.pc_mid_ns,
+        key=lambda probe: (
+            probe.probe_seq,
+            probe.pc_mid_ns,
+        ),
     )
 
     if not valid:
         return []
 
-    origin = valid[0].pc_mid_ns
+    first_background_seq = (
+        BURST_COUNT + 1
+    )
+
+    production_sequence_present = any(
+        probe.probe_seq
+        >= first_background_seq
+        for probe in valid
+    )
+
+    if production_sequence_present:
+
+        bursts: dict[
+            int,
+            list[ProbeObservation],
+        ] = {}
+
+        for probe in valid:
+
+            if (
+                probe.probe_seq
+                < first_background_seq
+            ):
+                continue
+
+            burst_index = (
+                (
+                    probe.probe_seq
+                    - first_background_seq
+                )
+                // BACKGROUND_BURST_SIZE
+            )
+
+            bursts.setdefault(
+                int(burst_index),
+                [],
+            ).append(
+                probe
+            )
+
+        return [
+            min(
+                bursts[index],
+                key=lambda probe: (
+                    probe.delay_like_ns,
+                    probe.probe_seq,
+                ),
+            )
+            for index in sorted(
+                bursts
+            )
+        ]
+
+
+    valid_by_time = sorted(
+        valid,
+        key=lambda probe:
+            probe.pc_mid_ns,
+    )
+
+    origin = (
+        valid_by_time[0]
+        .pc_mid_ns
+    )
 
     blocks: dict[
         int,
         list[ProbeObservation],
     ] = {}
 
-    for probe in valid:
+    for probe in valid_by_time:
 
         block_index = (
             probe.pc_mid_ns
@@ -190,23 +260,22 @@ def select_low_delay_background(
         blocks.setdefault(
             int(block_index),
             [],
-        ).append(probe)
+        ).append(
+            probe
+        )
 
-    selected = []
-
-    for block_index in sorted(blocks):
-
-        best = min(
-            blocks[block_index],
+    return [
+        min(
+            blocks[index],
             key=lambda probe: (
                 probe.delay_like_ns,
                 probe.probe_seq,
             ),
         )
-
-        selected.append(best)
-
-    return selected
+        for index in sorted(
+            blocks
+        )
+    ]
 
 
 def _fit_xy(

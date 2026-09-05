@@ -507,4 +507,153 @@ def test_noisy_affine_fit_uses_true_ols_with_intercept():
     assert model.alpha == pytest.approx(
         expected_alpha,
         abs=1e-12,
-    )    
+    )   
+    
+def test_r1_selector_keeps_microbursts_separate_when_first_probe_is_missing():
+
+    base_phone = 50_000_000_000
+    base_pc = 80_000_000_000
+
+    probes = [
+
+        make_probe(
+            seq=32,
+            phase="background",
+            phone_mid_ns=(
+                base_phone
+                + 1_550_000_000
+            ),
+            pc_mid_ns=(
+                base_pc
+                + 1_550_000_000
+            ),
+            delay_like_ns=9_000_000,
+        ),
+
+        make_probe(
+            seq=33,
+            phase="background",
+            phone_mid_ns=(
+                base_phone
+                + 1_600_000_000
+            ),
+            pc_mid_ns=(
+                base_pc
+                + 1_600_000_000
+            ),
+            delay_like_ns=8_000_000,
+        ),
+
+        make_probe(
+            seq=34,
+            phase="background",
+            phone_mid_ns=(
+                base_phone
+                + 1_650_000_000
+            ),
+            pc_mid_ns=(
+                base_pc
+                + 1_650_000_000
+            ),
+            delay_like_ns=7_000_000,
+        ),
+
+        make_probe(
+            seq=35,
+            phase="background",
+            phone_mid_ns=(
+                base_phone
+                + 1_700_000_000
+            ),
+            pc_mid_ns=(
+                base_pc
+                + 1_700_000_000
+            ),
+            delay_like_ns=6_000_000,
+        ),
+
+
+        make_probe(
+            seq=36,
+            phase="background",
+            phone_mid_ns=(
+                base_phone
+                + 11_500_000_000
+            ),
+            pc_mid_ns=(
+                base_pc
+                + 11_500_000_000
+            ),
+            delay_like_ns=1_000_000,
+        ),
+
+        make_probe(
+            seq=37,
+            phase="background",
+            phone_mid_ns=(
+                base_phone
+                + 11_550_000_000
+            ),
+            pc_mid_ns=(
+                base_pc
+                + 11_550_000_000
+            ),
+            delay_like_ns=5_000_000,
+        ),
+
+        make_probe(
+            seq=38,
+            phase="background",
+            phone_mid_ns=(
+                base_phone
+                + 11_600_000_000
+            ),
+            pc_mid_ns=(
+                base_pc
+                + 11_600_000_000
+            ),
+            delay_like_ns=4_000_000,
+        ),
+
+        make_probe(
+            seq=39,
+            phase="background",
+            phone_mid_ns=(
+                base_phone
+                + 11_650_000_000
+            ),
+            pc_mid_ns=(
+                base_pc
+                + 11_650_000_000
+            ),
+            delay_like_ns=3_000_000,
+        ),
+
+        make_probe(
+            seq=40,
+            phase="background",
+            phone_mid_ns=(
+                base_phone
+                + 11_700_000_000
+            ),
+            pc_mid_ns=(
+                base_pc
+                + 11_700_000_000
+            ),
+            delay_like_ns=2_000_000,
+        ),
+    ]
+
+    selected = (
+        select_low_delay_background(
+            probes
+        )
+    )
+
+    assert [
+        probe.probe_seq
+        for probe in selected
+    ] == [
+        35,
+        36,
+    ]     

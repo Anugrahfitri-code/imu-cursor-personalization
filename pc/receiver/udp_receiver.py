@@ -2,24 +2,29 @@ import csv
 import socket
 import time
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 
 HOST = "0.0.0.0"
 PORT = 5005
+
 BUFFER_SIZE = 4096
 
 EXPECTED_PROTOCOL_VERSION = 1
 
+# Agar Ctrl+C responsif
+SOCKET_TIMEOUT_SECONDS = 0.5
+
 
 # ============================================================
-# DATA MODEL
+# DATA STRUCTURE
 # ============================================================
 
 @dataclass
 class DataPacket:
+
     protocol_version: int
 
     session_id: str
@@ -41,6 +46,7 @@ class DataPacket:
     accuracy: int
 
 
+
 @dataclass
 class SessionStats:
     packet_count: int = 0
@@ -50,44 +56,89 @@ class SessionStats:
 
     missing_packets: int = 0
     out_of_order: int = 0
+    duplicate_packets: int = 0
+
+    received_sequences: set[int] = field(default_factory=set)
+    
+    @property
+    def longest_missing_burst(self) -> int:
+        """
+        Menghitung burst missing terpanjang secara exact
+        berdasarkan sequence unik yang benar-benar diterima.
+
+        Contoh:
+        received = {1, 2, 4, 5, 9, 10}
+
+        missing:
+        3
+        6, 7, 8
+
+        longest burst = 3
+        """
+
+        if len(self.received_sequences) < 2:
+            return 0
+
+        ordered = sorted(
+            self.received_sequences
+        )
+
+        longest = 0
+
+        for previous_seq, current_seq in zip(
+            ordered,
+            ordered[1:]
+        ):
+
+            gap = (
+                current_seq
+                - previous_seq
+                - 1
+            )
+
+            if gap > longest:
+                longest = gap
+
+        return longest    
 
 
 # ============================================================
-# PACKET PARSER
+# PARSER
 # ============================================================
 
 def parse_data_packet(message: str) -> DataPacket:
 
+
     parts = message.strip().split(",")
 
+
     if len(parts) != 14:
+
         raise ValueError(
-            f"Expected 14 fields, received {len(parts)}"
+            f"Expected 14 fields, got {len(parts)}"
         )
 
-    packet_type = parts[0]
 
-    if packet_type != "DATA":
+    if parts[0] != "DATA":
+
         raise ValueError(
-            f"Unsupported packet type: {packet_type}"
+            f"Invalid packet type: {parts[0]}"
         )
 
-    protocol_version = int(parts[1])
 
-    if protocol_version != EXPECTED_PROTOCOL_VERSION:
+    version = int(parts[1])
+
+
+    if version != EXPECTED_PROTOCOL_VERSION:
+
         raise ValueError(
-            f"Unsupported protocol version: {protocol_version}"
+            f"Unsupported protocol version {version}"
         )
 
-    sensor_type = parts[6]
-
-    if sensor_type not in {"ACC", "GYRO"}:
-        raise ValueError(
-            f"Invalid sensor type: {sensor_type}"
-        )
 
     return DataPacket(
-        protocol_version=protocol_version,
+
+        protocol_version=version,
 
         session_id=parts[2],
         record_name=parts[3],
@@ -95,7 +146,7 @@ def parse_data_packet(message: str) -> DataPacket:
         seq_global=int(parts[4]),
         seq_sensor=int(parts[5]),
 
-        sensor_type=sensor_type,
+        sensor_type=parts[6],
 
         sensor_ts_phone_ns=int(parts[7]),
         callback_elapsed_ns=int(parts[8]),
@@ -105,49 +156,86 @@ def parse_data_packet(message: str) -> DataPacket:
         y=float(parts[11]),
         z=float(parts[12]),
 
-        accuracy=int(parts[13]),
+        accuracy=int(parts[13])
     )
 
 
+
 # ============================================================
-# SESSION LOSS ACCOUNTING
+# LOSS ACCOUNTING
 # ============================================================
 
 def update_session_stats(
-    stats: SessionStats,
-    seq_global: int,
-) -> None:
-
+        stats: SessionStats,
+        seq: int
+):
     stats.packet_count += 1
 
-    if stats.first_seq is None:
-        stats.first_seq = seq_global
-        stats.last_seq = seq_global
+    # --------------------------------------------------------
+    # DUPLICATE
+    # --------------------------------------------------------
+    # Jika sequence sudah pernah diterima, paket ini duplicate.
+    # Jangan masukkan lagi ke unique sequence accounting.
+    if seq in stats.received_sequences:
+        stats.duplicate_packets += 1
         return
 
+    # --------------------------------------------------------
+    # FIRST PACKET
+    # --------------------------------------------------------
+    if not stats.received_sequences:
+        stats.received_sequences.add(seq)
+
+        stats.first_seq = seq
+        stats.last_seq = seq
+        stats.missing_packets = 0
+
+        return
+
+    assert stats.first_seq is not None
     assert stats.last_seq is not None
 
-    if seq_global > stats.last_seq + 1:
-
-        stats.missing_packets += (
-            seq_global
-            - stats.last_seq
-            - 1
-        )
-
-    elif seq_global <= stats.last_seq:
-
+    # --------------------------------------------------------
+    # OUT-OF-ORDER
+    # --------------------------------------------------------
+    # Paket unik tetapi sequence-nya lebih kecil daripada
+    # sequence tertinggi yang sebelumnya sudah diterima.
+    if seq < stats.last_seq:
         stats.out_of_order += 1
 
-    if seq_global > stats.last_seq:
-        stats.last_seq = seq_global
+    # Simpan sequence unik.
+    stats.received_sequences.add(seq)
+
+    # Update range sequence aktual.
+    if seq < stats.first_seq:
+        stats.first_seq = seq
+
+    if seq > stats.last_seq:
+        stats.last_seq = seq
+
+    expected = (
+        stats.last_seq
+        - stats.first_seq
+        + 1
+    )
+
+    unique_received = len(
+        stats.received_sequences
+    )
+
+    stats.missing_packets = (
+        expected
+        - unique_received
+    )
+
 
 
 # ============================================================
-# MAIN
+# MAIN RECEIVER
 # ============================================================
 
-def main() -> None:
+def main():
+
 
     output_dir = (
         Path(__file__)
@@ -156,133 +244,185 @@ def main() -> None:
         / "logs"
     )
 
+
     output_dir.mkdir(
         parents=True,
         exist_ok=True
     )
 
+
     timestamp = datetime.now().strftime(
         "%Y%m%d_%H%M%S"
     )
 
+
     output_file = (
         output_dir
-        / f"udp_stream_{timestamp}.csv"
+        /
+        f"udp_stream_{timestamp}.csv"
     )
+
+
+    sessions = {}
+
+
+    total_packets = 0
+    invalid_packets = 0
+
 
     sock = socket.socket(
         socket.AF_INET,
         socket.SOCK_DGRAM
     )
 
+
     sock.bind(
         (HOST, PORT)
     )
 
 
+    # ========================================================
+    # FIX UTAMA
+    # ========================================================
+
+    sock.settimeout(
+        SOCKET_TIMEOUT_SECONDS
+    )
+
+
     print("=" * 70)
-    print("IMU UDP Receiver")
-    print(f"Listening on UDP {HOST}:{PORT}")
-    print(f"Protocol version: {EXPECTED_PROTOCOL_VERSION}")
-    print(f"Output: {output_file}")
-    print("Press CTRL+C to stop")
+
+    print(
+        "IMU UDP Receiver"
+    )
+
+    print(
+        f"Listening on UDP {HOST}:{PORT}"
+    )
+
+    print(
+        f"Protocol version: {EXPECTED_PROTOCOL_VERSION}"
+    )
+
+    print(
+        f"Socket timeout: {SOCKET_TIMEOUT_SECONDS}s"
+    )
+
+    print(
+        f"Output: {output_file}"
+    )
+
+    print(
+        "Press CTRL+C to stop"
+    )
+
     print("=" * 70)
 
 
-    sessions: dict[str, SessionStats] = {}
 
-    total_packets = 0
-    invalid_packets = 0
+    try:
 
-
-    with open(
-        output_file,
-        "w",
-        newline="",
-        encoding="utf-8"
-    ) as file_handle:
-
-        writer = csv.writer(
-            file_handle
-        )
+        with open(
+            output_file,
+            "w",
+            newline="",
+            encoding="utf-8"
+        ) as f:
 
 
-        writer.writerow([
-            "pc_receive_monotonic_ns",
-            "pc_receive_wall_ns",
-
-            "source_ip",
-            "source_port",
-
-            "protocol_version",
-
-            "session_id",
-            "record_name",
-
-            "seq_global",
-            "seq_sensor",
-
-            "sensor_type",
-
-            "sensor_ts_phone_ns",
-            "callback_elapsed_ns",
-            "send_elapsed_ns",
-
-            "x",
-            "y",
-            "z",
-
-            "accuracy",
-        ])
+            writer = csv.writer(f)
 
 
-        try:
+            writer.writerow([
+
+                "pc_receive_monotonic_ns",
+
+                "pc_receive_wall_ns",
+
+                "source_ip",
+
+                "source_port",
+
+                "protocol_version",
+
+                "session_id",
+
+                "record_name",
+
+                "seq_global",
+
+                "seq_sensor",
+
+                "sensor_type",
+
+                "sensor_ts_phone_ns",
+
+                "callback_elapsed_ns",
+
+                "send_elapsed_ns",
+
+                "x",
+
+                "y",
+
+                "z",
+
+                "accuracy"
+
+            ])
+
+
 
             while True:
 
-                data, address = sock.recvfrom(
-                    BUFFER_SIZE
-                )
+
+                try:
+
+                    data, addr = sock.recvfrom(
+                        BUFFER_SIZE
+                    )
 
 
-                
-                # PC receive timestamps are captured
-                # immediately after recvfrom returns.
+                except socket.timeout:
+
+                    # hanya timeout normal
+                    continue
+
 
 
                 pc_receive_monotonic_ns = (
                     time.monotonic_ns()
                 )
 
+
                 pc_receive_wall_ns = (
                     time.time_ns()
                 )
 
 
+
                 try:
 
-                    message = data.decode(
-                        "utf-8"
-                    )
-
-
                     packet = parse_data_packet(
-                        message
+                        data.decode("utf-8")
                     )
 
 
-                except Exception as error:
+                except Exception as e:
 
                     invalid_packets += 1
 
                     print(
-                        f"[INVALID PACKET] {error}"
+                        "[INVALID]",
+                        e
                     )
 
                     continue
 
 
+
                 total_packets += 1
+
 
 
                 if packet.session_id not in sessions:
@@ -292,173 +432,213 @@ def main() -> None:
                     ] = SessionStats()
 
 
-                session_stats = sessions[
+
+                stats = sessions[
                     packet.session_id
                 ]
 
 
                 update_session_stats(
-                    session_stats,
+                    stats,
                     packet.seq_global
                 )
 
 
+
                 writer.writerow([
+
+
                     pc_receive_monotonic_ns,
+
                     pc_receive_wall_ns,
 
-                    address[0],
-                    address[1],
+                    addr[0],
+
+                    addr[1],
 
                     packet.protocol_version,
 
                     packet.session_id,
+
                     packet.record_name,
 
                     packet.seq_global,
+
                     packet.seq_sensor,
 
                     packet.sensor_type,
 
                     packet.sensor_ts_phone_ns,
+
                     packet.callback_elapsed_ns,
+
                     packet.send_elapsed_ns,
 
                     packet.x,
+
                     packet.y,
+
                     packet.z,
 
-                    packet.accuracy,
+                    packet.accuracy
+
                 ])
+
 
 
                 if total_packets % 200 == 0:
 
-                    file_handle.flush()
+
+                    f.flush()
 
 
                     expected = (
 
-                        (
-                            session_stats.last_seq
-                            - session_stats.first_seq
-                            + 1
-                        )
-
-                        if (
-                            session_stats.first_seq
-                            is not None
-
-                            and session_stats.last_seq
-                            is not None
-                        )
-
-                        else 0
+                        stats.last_seq
+                        -
+                        stats.first_seq
+                        +
+                        1
                     )
 
 
-                    loss_pct = (
+                    loss = (
 
-                        (
-                            100.0
-                            * session_stats.missing_packets
-                            / expected
-                        )
+                        100
+                        *
+                        stats.missing_packets
+                        /
+                        expected
 
-                        if expected > 0
-
-                        else 0.0
                     )
 
 
                     print(
+
                         f"session={packet.record_name} "
-                        f"packets={session_stats.packet_count} "
-                        f"last_seq={session_stats.last_seq} "
-                        f"missing={session_stats.missing_packets} "
-                        f"loss={loss_pct:.4f}% "
-                        f"out_of_order={session_stats.out_of_order}"
+
+                        f"packets={stats.packet_count} "
+
+                        f"last_seq={stats.last_seq} "
+
+                        f"missing={stats.missing_packets} "
+
+                        f"loss={loss:.4f}% "
+
+                        f"duplicate={stats.duplicate_packets} "
+
+                        f"out_of_order={stats.out_of_order}"
+
                     )
 
 
-        except KeyboardInterrupt:
+
+    except KeyboardInterrupt:
+
+
+        print("\nCTRL+C received. Stopping receiver...")
+
+
+
+    finally:
+
+
+        try:
+
+            sock.close()
+
+        except:
 
             pass
 
 
-    sock.close()
-
-
-    print()
-    print("=" * 70)
-    print("Receiver stopped")
-    print(f"Total valid packets : {total_packets}")
-    print(f"Invalid packets     : {invalid_packets}")
-    print()
-
-
-    for session_id, stats in sessions.items():
-
-        expected = (
-
-            (
-                stats.last_seq
-                - stats.first_seq
-                + 1
-            )
-
-            if (
-                stats.first_seq is not None
-                and stats.last_seq is not None
-            )
-
-            else 0
-        )
-
-
-        loss_pct = (
-
-            (
-                100.0
-                * stats.missing_packets
-                / expected
-            )
-
-            if expected > 0
-
-            else 0.0
-        )
-
-
-        print(
-            f"Session {session_id}"
-        )
-
-        print(
-            f"  received     : {stats.packet_count}"
-        )
-
-        print(
-            f"  missing      : {stats.missing_packets}"
-        )
-
-        print(
-            f"  loss         : {loss_pct:.6f}%"
-        )
-
-        print(
-            f"  out-of-order : {stats.out_of_order}"
-        )
 
         print()
 
+        print("=" * 70)
 
-    print(
-        f"Saved to: {output_file}"
-    )
+        print(
+            "Receiver stopped"
+        )
 
-    print("=" * 70)
+        print(
+            f"Total valid packets : {total_packets}"
+        )
+
+        print(
+            f"Invalid packets     : {invalid_packets}"
+        )
+
+
+
+        for sid, stats in sessions.items():
+
+
+            expected = (
+
+                stats.last_seq
+                -
+                stats.first_seq
+                +
+                1
+
+            )
+
+
+            loss = (
+
+                100
+                *
+                stats.missing_packets
+                /
+                expected
+
+            )
+
+
+
+            print()
+
+            print(
+                f"Session {sid}"
+            )
+
+            print(
+                f" received     : {stats.packet_count}"
+            )
+
+            print(
+                f" missing      : {stats.missing_packets}"
+            )
+
+            print(
+                f" duplicate    : {stats.duplicate_packets}"
+            )
+
+            print(
+                f" loss         : {loss:.6f}%"
+            )
+            
+            print(
+                f" max burst    : {stats.longest_missing_burst}"
+            )
+
+            print(
+                f" out-of-order : {stats.out_of_order}"
+            )
+
+
+        print()
+
+        print(
+            f"Saved to: {output_file}"
+        )
+
+        print("=" * 70)
+
+
 
 
 if __name__ == "__main__":
+
     main()

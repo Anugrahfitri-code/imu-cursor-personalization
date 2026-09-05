@@ -98,6 +98,32 @@ def test_out_of_order_detection():
 
     update_session_stats(
         stats,
+        12
+    )
+
+    assert stats.missing_packets == 1
+
+    update_session_stats(
+        stats,
+        11
+    )
+
+    assert stats.packet_count == 3
+    assert stats.missing_packets == 0
+    assert stats.out_of_order == 1
+    assert stats.duplicate_packets == 0
+    
+def test_duplicate_detection():
+
+    stats = SessionStats()
+
+    update_session_stats(
+        stats,
+        10
+    )
+
+    update_session_stats(
+        stats,
         11
     )
 
@@ -106,4 +132,61 @@ def test_out_of_order_detection():
         10
     )
 
+    assert stats.packet_count == 3
+    assert stats.missing_packets == 0
+    assert stats.duplicate_packets == 1
+
+    assert stats.out_of_order == 0
+    
+def test_late_out_of_order_packet_resolves_missing_gap():
+    stats = SessionStats()
+
+    update_session_stats(stats, 232837)
+    update_session_stats(stats, 232839)
+
+    # Pada titik ini 232838 memang belum tiba.
+    assert stats.missing_packets == 1
+
+    # Paket yang dianggap hilang ternyata datang terlambat.
+    update_session_stats(stats, 232838)
+    update_session_stats(stats, 232840)
+
+    # Final accounting harus mengoreksi missing menjadi nol.
+    assert stats.packet_count == 4
+    assert stats.missing_packets == 0
+    assert stats.duplicate_packets == 0
     assert stats.out_of_order == 1
+    assert stats.first_seq == 232837
+    assert stats.last_seq == 232840
+    
+def test_longest_missing_burst_exact():
+
+    stats = SessionStats()
+
+    # Received:
+    # 1, 2, [3 missing], 4, 5,
+    # [6,7,8 missing], 9, 10
+    for seq in [
+        1,
+        2,
+        4,
+        5,
+        9,
+        10,
+    ]:
+        update_session_stats(
+            stats,
+            seq
+        )
+
+    # Missing sequence:
+    # 3, 6, 7, 8
+    assert stats.missing_packets == 4
+
+    # Burst terpanjang:
+    # 6,7,8 = 3 packet
+    assert getattr(
+        stats,
+        "longest_missing_burst",
+        None
+    ) == 3    

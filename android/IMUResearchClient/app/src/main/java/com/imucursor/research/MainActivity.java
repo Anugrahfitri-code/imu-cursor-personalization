@@ -2764,6 +2764,8 @@ public class MainActivity extends AppCompatActivity
 
         clockSyncController.stop();
 
+        super.onDestroy();
+
 
         if (recording) {
 
@@ -2774,27 +2776,7 @@ public class MainActivity extends AppCompatActivity
         if (sensorThread != null) {
 
             sensorThread.quitSafely();
-
-            try {
-
-                sensorThread.join(
-                        2000L
-                );
-
-            } catch (
-                    InterruptedException e
-            ) {
-
-                Thread.currentThread()
-                        .interrupt();
-            }
-
-            sensorThread = null;
-            sensorHandler = null;
         }
-
-
-        super.onDestroy();
     }
 
 

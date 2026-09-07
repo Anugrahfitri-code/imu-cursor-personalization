@@ -125,6 +125,9 @@ public class MainActivity extends AppCompatActivity
     private volatile boolean networkReady = false;
 
     private DatagramSocket udpSocket;
+    private final ClockSyncController
+            clockSyncController =
+            new ClockSyncController();
 
     private InetAddress pcAddress;
     private int pcPort;
@@ -250,6 +253,12 @@ public class MainActivity extends AppCompatActivity
         setContentView(
                 R.layout.activity_main
         );
+
+        // =========================================================
+        // M2.3 CLOCK SYNCHRONIZATION
+        // =========================================================
+
+        clockSyncController.start();
 
 
         // -----------------------------------------------------
@@ -2753,6 +2762,8 @@ public class MainActivity extends AppCompatActivity
     @Override
     protected void onDestroy() {
 
+        clockSyncController.stop();
+
         super.onDestroy();
 
 
@@ -2767,4 +2778,6 @@ public class MainActivity extends AppCompatActivity
             sensorThread.quitSafely();
         }
     }
+
+
 }

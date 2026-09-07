@@ -189,7 +189,7 @@ def test_analyze_session_writes_model_and_summary(
         alpha,
         abs=1e-9,
     )
-    
+
 CSV_FIELDS = [
     "session_id",
     "probe_phase",
@@ -610,8 +610,8 @@ def test_analysis_rejects_implausible_clock_skew(
     ):
         analyze_session(
             session_dir
-        )   
-        
+        )
+
 def test_analyze_cli_parser_accepts_session_dir(
     tmp_path,
 ):
@@ -670,6 +670,4 @@ def test_analyze_cli_main_calls_session_analysis(
 
     assert result == 0
     assert called["path"] == session_dir
-    assert "Analysis complete" in output         
-    
-    
+    assert "Analysis complete" in output

@@ -348,7 +348,7 @@ def _fit_xy(
         / denominator
     )
 
-   
+
     centered_intercept = (
         y_mean
         - alpha * x_mean

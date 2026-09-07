@@ -237,7 +237,7 @@ def test_zero_background_duration_has_only_bursts():
     assert len(startup) == 30
     assert len(background) == 0
     assert len(shutdown) == 30
-    
+
 def _start_udp_responder(handler):
     server = socket.socket(
         socket.AF_INET,
@@ -603,7 +603,7 @@ def test_execute_probe_records_last_invalid_response_reason():
         result.invalid_reason
         == "seq_mismatch"
     )
-    
+
 def test_run_sync_session_persists_scheduled_probe_rows(
     tmp_path,
     monkeypatch,

@@ -341,7 +341,7 @@ def execute_probe(
             )
 
         return result
-    
+
 def build_probe_schedule(
     *,
     background_duration_s: float,
@@ -533,7 +533,7 @@ def write_probe_csv(
                         row.model_residual_ns,
                 }
             )
-            
+
 def run_sync_session(
     *,
     phone_ip: str,
@@ -609,7 +609,7 @@ def run_sync_session(
             rows,
         )
 
-    return csv_path            
+    return csv_path
 def build_arg_parser(
 ) -> argparse.ArgumentParser:
 

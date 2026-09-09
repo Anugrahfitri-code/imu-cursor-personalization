@@ -107,6 +107,15 @@
             android:singleLine="true"/>
 
         <TextView
+            android:id="@+id/txtTimer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="Recording time: 00:00:00"
+            android:textSize="22sp"
+            android:textStyle="bold"/>
+
+        <TextView
             android:id="@+id/txtCount"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

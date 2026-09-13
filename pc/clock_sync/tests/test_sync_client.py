@@ -857,3 +857,275 @@ def test_cli_parser_accepts_required_session_arguments():
     )
 
     assert args.duration_s == 120.0
+
+
+def test_execute_probe_logs_stale_response_then_correct_response():
+
+    def responder(
+        server,
+        message,
+        address,
+    ):
+        seq, t1 = _request_fields(
+            message
+        )
+
+        stale = (
+            f"SYNC_RESP,1,"
+            f"{seq - 5},"
+            f"{t1 - 12345},"
+            f"2000000,"
+            f"2001000"
+        )
+
+        correct = (
+            f"SYNC_RESP,1,"
+            f"{seq},"
+            f"{t1},"
+            f"3000000,"
+            f"3001000"
+        )
+
+        server.sendto(
+            stale.encode("utf-8"),
+            address,
+        )
+
+        server.sendto(
+            correct.encode("utf-8"),
+            address,
+        )
+
+    port, finished, thread = (
+        _start_udp_responder(
+            responder
+        )
+    )
+
+    sock = socket.socket(
+        socket.AF_INET,
+        socket.SOCK_DGRAM,
+    )
+
+    rx_events = []
+
+    try:
+        result = execute_probe(
+            sock,
+            phone_ip="127.0.0.1",
+            port=port,
+            timeout_s=0.25,
+            session_id="diagnostic_test",
+            phase="background",
+            seq=51,
+            rx_events=rx_events,
+        )
+
+    finally:
+        sock.close()
+
+    finished.wait(1.0)
+    thread.join(timeout=1.0)
+
+    assert result.response_valid is True
+
+    assert len(rx_events) == 2
+
+    stale_event = rx_events[0]
+
+    assert stale_event.session_id == "diagnostic_test"
+    assert stale_event.probe_phase == "background"
+
+    assert stale_event.expected_probe_seq == 51
+    assert stale_event.actual_probe_seq == 46
+
+    assert (
+        stale_event.classification
+        == "seq_mismatch"
+    )
+
+    assert stale_event.source_ip == "127.0.0.1"
+    assert stale_event.source_port == port
+
+    assert stale_event.receive_pc_ns > 0
+
+    correct_event = rx_events[1]
+
+    assert correct_event.expected_probe_seq == 51
+    assert correct_event.actual_probe_seq == 51
+
+    assert (
+        correct_event.classification
+        == "accepted"
+    )
+
+
+def test_run_sync_session_persists_receive_event_log(
+    tmp_path,
+    monkeypatch,
+):
+    schedule = [
+        ScheduledProbe(
+            phase="background",
+            target_offset_s=0.0,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        sync_client_module,
+        "build_probe_schedule",
+        lambda *,
+        background_duration_s: schedule,
+    )
+
+    def fake_execute_probe(
+        sock,
+        **kwargs,
+    ):
+        rx_events = kwargs.get(
+            "rx_events"
+        )
+
+        if rx_events is not None:
+            rx_events.append(
+                sync_client_module.RxEvent(
+                    session_id=(
+                        kwargs["session_id"]
+                    ),
+                    probe_phase=(
+                        kwargs["phase"]
+                    ),
+                    expected_probe_seq=(
+                        kwargs["seq"]
+                    ),
+                    expected_t1_pc_ns=(
+                        1_000_000
+                    ),
+                    actual_probe_seq=(
+                        kwargs["seq"] - 5
+                    ),
+                    actual_t1_pc_ns=(
+                        987_655
+                    ),
+                    receive_pc_ns=(
+                        1_250_000
+                    ),
+                    source_ip=(
+                        "192.168.8.124"
+                    ),
+                    source_port=5006,
+                    classification=(
+                        "seq_mismatch"
+                    ),
+                    raw_response=(
+                        "SYNC_RESP,1,"
+                        "46,987655,"
+                        "2000000,2001000"
+                    ),
+                )
+            )
+
+        return ProbeResult(
+            session_id=(
+                kwargs["session_id"]
+            ),
+            probe_phase=(
+                kwargs["phase"]
+            ),
+            probe_seq=(
+                kwargs["seq"]
+            ),
+            t1_pc_ns=1_000_000,
+            t2_phone_ns=2_000_000,
+            t3_phone_ns=2_001_000,
+            t4_pc_ns=1_050_000,
+            response_valid=True,
+            invalid_reason="",
+        )
+
+    monkeypatch.setattr(
+        sync_client_module,
+        "execute_probe",
+        fake_execute_probe,
+    )
+
+    monkeypatch.setattr(
+        sync_client_module.time,
+        "monotonic",
+        lambda: 0.0,
+    )
+
+    monkeypatch.setattr(
+        sync_client_module.time,
+        "sleep",
+        lambda _seconds: None,
+    )
+
+    csv_path = run_sync_session(
+        phone_ip="192.168.8.124",
+        session_id="rx_log_test",
+        background_duration_s=10.0,
+        output_root=tmp_path,
+    )
+
+    rx_path = (
+        csv_path.parent
+        / "sync_rx_events.csv"
+    )
+
+    assert rx_path.exists()
+
+    with rx_path.open(
+        "r",
+        newline="",
+        encoding="utf-8",
+    ) as handle:
+        rows = list(
+            csv.DictReader(handle)
+        )
+
+    assert len(rows) == 1
+
+    row = rows[0]
+
+    assert row["session_id"] == "rx_log_test"
+    assert row["probe_phase"] == "background"
+
+    assert row["expected_probe_seq"] == "1"
+    assert row["actual_probe_seq"] == "-4"
+
+    assert (
+        row["expected_t1_pc_ns"]
+        == "1000000"
+    )
+
+    assert (
+        row["actual_t1_pc_ns"]
+        == "987655"
+    )
+
+    assert (
+        row["receive_pc_ns"]
+        == "1250000"
+    )
+
+    assert (
+        row["source_ip"]
+        == "192.168.8.124"
+    )
+
+    assert row["source_port"] == "5006"
+
+    assert (
+        row["classification"]
+        == "seq_mismatch"
+    )
+
+    assert (
+        row["raw_response"]
+        == (
+            "SYNC_RESP,1,"
+            "46,987655,"
+            "2000000,2001000"
+        )
+    )

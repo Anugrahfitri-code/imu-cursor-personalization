@@ -23,6 +23,7 @@ BACKGROUND_BURST_SIZE = 5
 BACKGROUND_PROBE_INTERVAL_S = 0.05
 BACKGROUND_BURST_INTERVAL_S = 10.0
 
+
 def _classify_response_error(
     error: Exception,
 ) -> str:
@@ -43,10 +44,67 @@ def _classify_response_error(
     return "malformed_response"
 
 
+def _extract_response_identity(
+    message: str,
+) -> tuple[int | None, int | None]:
+    """
+    Best-effort extraction used only for diagnostics.
+
+    This deliberately does not replace protocol validation.
+    parse_sync_response() remains the authority for deciding whether
+    a response is valid for the currently expected probe.
+    """
+    parts = message.strip().split(
+        ",",
+        -1,
+    )
+
+    if (
+        len(parts) < 4
+        or parts[0] != "SYNC_RESP"
+    ):
+        return None, None
+
+    try:
+        actual_probe_seq = int(
+            parts[2]
+        )
+        actual_t1_pc_ns = int(
+            parts[3]
+        )
+    except (ValueError, IndexError):
+        return None, None
+
+    return (
+        actual_probe_seq,
+        actual_t1_pc_ns,
+    )
+
+
 @dataclass(frozen=True)
 class ScheduledProbe:
     phase: str
     target_offset_s: float
+
+
+@dataclass(frozen=True)
+class RxEvent:
+    session_id: str
+    probe_phase: str
+
+    expected_probe_seq: int
+    expected_t1_pc_ns: int
+
+    actual_probe_seq: int | None
+    actual_t1_pc_ns: int | None
+
+    receive_pc_ns: int
+
+    source_ip: str
+    source_port: int
+
+    classification: str
+    raw_response: str
 
 
 @dataclass
@@ -156,6 +214,7 @@ class ProbeResult:
             + self.t4_pc_ns
         ) // 2
 
+
 def execute_probe(
     sock: socket.socket,
     *,
@@ -165,6 +224,7 @@ def execute_probe(
     seq: int,
     port: int = SYNC_PORT,
     timeout_s: float = PROBE_TIMEOUT_S,
+    rx_events: list[RxEvent] | None = None,
 ) -> ProbeResult:
 
     if seq < 0:
@@ -235,7 +295,7 @@ def execute_probe(
         )
 
         try:
-            payload, _address = (
+            payload, address = (
                 sock.recvfrom(4096)
             )
 
@@ -275,9 +335,16 @@ def execute_probe(
                 ),
             )
 
-        # Stamp t4 immediately after receiving
-        # the datagram, before parsing it.
-        t4_pc_ns = time.monotonic_ns()
+        # Stamp receive time immediately after receiving
+        # the datagram, before decoding/parsing it.
+        receive_pc_ns = time.monotonic_ns()
+
+        source_ip = str(
+            address[0]
+        )
+        source_port = int(
+            address[1]
+        )
 
         try:
             message = payload.decode(
@@ -288,7 +355,39 @@ def execute_probe(
             last_invalid_reason = (
                 "malformed_response"
             )
+
+            if rx_events is not None:
+                rx_events.append(
+                    RxEvent(
+                        session_id=session_id,
+                        probe_phase=phase,
+                        expected_probe_seq=seq,
+                        expected_t1_pc_ns=t1_pc_ns,
+                        actual_probe_seq=None,
+                        actual_t1_pc_ns=None,
+                        receive_pc_ns=receive_pc_ns,
+                        source_ip=source_ip,
+                        source_port=source_port,
+                        classification=(
+                            "malformed_response"
+                        ),
+                        raw_response=(
+                            payload.decode(
+                                "utf-8",
+                                errors="replace",
+                            )
+                        ),
+                    )
+                )
+
             continue
+
+        (
+            actual_probe_seq,
+            actual_t1_pc_ns,
+        ) = _extract_response_identity(
+            message
+        )
 
         try:
             response = (
@@ -302,11 +401,37 @@ def execute_probe(
             )
 
         except ValueError as error:
-            last_invalid_reason = (
+            classification = (
                 _classify_response_error(
                     error
                 )
             )
+
+            last_invalid_reason = (
+                classification
+            )
+
+            if rx_events is not None:
+                rx_events.append(
+                    RxEvent(
+                        session_id=session_id,
+                        probe_phase=phase,
+                        expected_probe_seq=seq,
+                        expected_t1_pc_ns=t1_pc_ns,
+                        actual_probe_seq=(
+                            actual_probe_seq
+                        ),
+                        actual_t1_pc_ns=(
+                            actual_t1_pc_ns
+                        ),
+                        receive_pc_ns=receive_pc_ns,
+                        source_ip=source_ip,
+                        source_port=source_port,
+                        classification=classification,
+                        raw_response=message,
+                    )
+                )
+
             continue
 
         result = ProbeResult(
@@ -321,7 +446,7 @@ def execute_probe(
             t3_phone_ns=(
                 response.t3_phone_ns
             ),
-            t4_pc_ns=t4_pc_ns,
+            t4_pc_ns=receive_pc_ns,
 
             response_valid=True,
             invalid_reason="",
@@ -331,6 +456,8 @@ def execute_probe(
             result.delay_like_ns
         )
 
+        classification = "accepted"
+
         if (
             delay_like_ns is None
             or delay_like_ns < 0
@@ -339,8 +466,33 @@ def execute_probe(
             result.invalid_reason = (
                 "negative_delay"
             )
+            classification = (
+                "negative_delay"
+            )
+
+        if rx_events is not None:
+            rx_events.append(
+                RxEvent(
+                    session_id=session_id,
+                    probe_phase=phase,
+                    expected_probe_seq=seq,
+                    expected_t1_pc_ns=t1_pc_ns,
+                    actual_probe_seq=(
+                        actual_probe_seq
+                    ),
+                    actual_t1_pc_ns=(
+                        actual_t1_pc_ns
+                    ),
+                    receive_pc_ns=receive_pc_ns,
+                    source_ip=source_ip,
+                    source_port=source_port,
+                    classification=classification,
+                    raw_response=message,
+                )
+            )
 
         return result
+
 
 def build_probe_schedule(
     *,
@@ -426,6 +578,84 @@ def build_probe_schedule(
         )
 
     return schedule
+
+
+RX_EVENT_FIELDS = [
+    "session_id",
+    "probe_phase",
+    "expected_probe_seq",
+    "expected_t1_pc_ns",
+    "actual_probe_seq",
+    "actual_t1_pc_ns",
+    "receive_pc_ns",
+    "source_ip",
+    "source_port",
+    "classification",
+    "raw_response",
+]
+
+
+def write_rx_events_csv(
+    path: Path,
+    rows: list[RxEvent],
+) -> None:
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    with path.open(
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as handle:
+
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=RX_EVENT_FIELDS,
+        )
+
+        writer.writeheader()
+
+        for row in rows:
+
+            writer.writerow(
+                {
+                    "session_id":
+                        row.session_id,
+
+                    "probe_phase":
+                        row.probe_phase,
+
+                    "expected_probe_seq":
+                        row.expected_probe_seq,
+
+                    "expected_t1_pc_ns":
+                        row.expected_t1_pc_ns,
+
+                    "actual_probe_seq":
+                        row.actual_probe_seq,
+
+                    "actual_t1_pc_ns":
+                        row.actual_t1_pc_ns,
+
+                    "receive_pc_ns":
+                        row.receive_pc_ns,
+
+                    "source_ip":
+                        row.source_ip,
+
+                    "source_port":
+                        row.source_port,
+
+                    "classification":
+                        row.classification,
+
+                    "raw_response":
+                        row.raw_response,
+                }
+            )
 
 
 CSV_FIELDS = [
@@ -534,6 +764,7 @@ def write_probe_csv(
                 }
             )
 
+
 def run_sync_session(
     *,
     phone_ip: str,
@@ -558,7 +789,13 @@ def run_sync_session(
         / "sync_probes.csv"
     )
 
+    rx_csv_path = (
+        session_dir
+        / "sync_rx_events.csv"
+    )
+
     rows: list[ProbeResult] = []
+    rx_events: list[RxEvent] = []
 
     sock = socket.socket(
         socket.AF_INET,
@@ -595,6 +832,7 @@ def run_sync_session(
                 session_id=session_id,
                 phase=item.phase,
                 seq=seq,
+                rx_events=rx_events,
             )
 
             rows.append(
@@ -609,7 +847,14 @@ def run_sync_session(
             rows,
         )
 
+        write_rx_events_csv(
+            rx_csv_path,
+            rx_events,
+        )
+
     return csv_path
+
+
 def build_arg_parser(
 ) -> argparse.ArgumentParser:
 
@@ -662,6 +907,7 @@ def build_arg_parser(
 
     return parser
 
+
 def main(
     argv: list[str] | None = None,
 ) -> int:
@@ -691,6 +937,7 @@ def main(
     )
 
     return 0
+
 
 if __name__ == "__main__":
     raise SystemExit(

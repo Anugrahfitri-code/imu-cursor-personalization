@@ -1,12 +1,3 @@
-Bisa. Supaya tidak repot dengan PowerShell here-string yang panjang,
-**buat file ini secara manual**:
-
-`docs/decisions/stage2_1_experimental_data_contract_v1_0.md`
-
-Lalu copy-paste **seluruh isi berikut** ke file tersebut dan save
-sebagai UTF-8.
-
-``` markdown
 # Stage 2.1 Experimental Data Contract v1.0 Freeze Decision
 
 ## 1. Decision Identity
@@ -792,38 +783,3 @@ git rev-list -n 1 stage2.1-experimental-data-contract-v1.0
 Only after the hashes match and all exit criteria are satisfied may
 Stage 2.1 be declared formally complete and development proceed to the
 next formal experiment-system work package.
-
-
-    Setelah Anda paste dan save file tersebut, **jangan commit/tag dulu**. Lanjut dengan test dan source-boundary gate yang tadi sudah saya berikan. Kalau mau lebih praktis, setelah file sudah tersimpan cukup kirim output dari command berikut:
-
-    ```powershell
-    cd "D:\IMU_Cursor_Research"
-
-    python -m pytest `
-      ".\pc\experiment\tests" `
-      -q
-
-    python -m pytest `
-      ".\pc\clock_sync\tests" `
-      ".\pc\cursor_preview\tests" `
-      ".\pc\experiment\tests" `
-      -q
-
-    python -m pytest `
-      ".\pc\receiver\test_udp_receiver.py" `
-      -q
-
-    git check-ignore -v "participant_data/"
-
-    git diff `
-      "82d907bd8820c66708dfa6dfd17e43c663f52a7a..HEAD" `
-      --name-status
-
-    git status --short
-
-    git diff --name-status
-
-    git diff --cached --name-status
-
-Setelah hasil itu Anda kirim, saya cek satu per satu sebelum kita
-melakukan **freeze commit + tag final Stage 2.1**.

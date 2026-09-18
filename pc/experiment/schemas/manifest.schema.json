@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "imu-cursor-experiment-manifest-v1.0",
+  "title": "IMU Cursor Experimental Session Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "participant_id",
+    "session_id",
+    "dataset_role",
+    "session_status",
+    "experiment_protocol_version",
+    "condition_order",
+    "functional_commit",
+    "experiment_software_version",
+    "device",
+    "display",
+    "android_evidence",
+    "clock_evidence",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "participant_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dataset_role": {
+      "type": "string",
+      "enum": [
+        "development",
+        "pilot",
+        "evaluation",
+        "synthetic"
+      ]
+    },
+    "session_status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "closed"
+      ]
+    },
+    "experiment_protocol_version": {
+      "type": "string"
+    },
+    "condition_order": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "P0",
+          "P2C",
+          "L0",
+          "L2C"
+        ]
+      }
+    },
+    "functional_commit": {
+      "type": "string"
+    },
+    "experiment_software_version": {
+      "type": "string"
+    },
+    "device": {
+      "type": "object"
+    },
+    "display": {
+      "type": "object"
+    },
+    "android_evidence": {
+      "type": "object"
+    },
+    "clock_evidence": {
+      "type": "object"
+    },
+    "files": {
+      "type": "array"
+    }
+  }
+}

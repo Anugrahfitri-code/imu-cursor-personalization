@@ -46,9 +46,11 @@ def _print_validation_report(
     report: ValidationReport,
 ) -> None:
     if report.is_valid:
+        print("VALIDATION_STATUS=PASS")
         print("VALIDATION = PASS")
         return
 
+    print("VALIDATION_STATUS=FAIL")
     print("VALIDATION = FAIL")
 
     for issue in report.issues:
@@ -78,6 +80,7 @@ def _command_finalize(
     _print_validation_report(report)
 
     if not report.is_valid:
+        print("FINALIZATION_STATUS=FAIL")
         print(
             "FINALIZE = REFUSED "
             "(session validation failed)"
@@ -98,14 +101,18 @@ def _command_finalize(
     )
 
     if hash_errors:
+        print("HASH_VERIFY_STATUS=FAIL")
         print("HASH VERIFY = FAIL")
 
         for error in hash_errors:
             print(error)
 
+        print("FINALIZATION_STATUS=FAIL")
         return 1
 
+    print("HASH_VERIFY_STATUS=PASS")
     print("HASH VERIFY = PASS")
+    print("FINALIZATION_STATUS=PASS")
     print("FINALIZE = PASS")
 
     return 0
@@ -119,6 +126,7 @@ def _command_verify_hashes(
     )
 
     if errors:
+        print("HASH_VERIFY_STATUS=FAIL")
         print("HASH VERIFY = FAIL")
 
         for error in errors:
@@ -126,6 +134,7 @@ def _command_verify_hashes(
 
         return 1
 
+    print("HASH_VERIFY_STATUS=PASS")
     print("HASH VERIFY = PASS")
 
     return 0

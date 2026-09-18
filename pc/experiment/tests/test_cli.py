@@ -128,3 +128,84 @@ def test_usage_failure_returns_two():
     exit_code = main([])
 
     assert exit_code == 2
+
+
+def test_validate_success_emits_machine_readable_status(
+    tmp_path,
+    capsys,
+):
+    session_dir = build_synthetic_session(tmp_path)
+
+    exit_code = main([
+        "validate",
+        str(session_dir),
+    ])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "VALIDATION_STATUS=PASS" in captured.out
+
+
+def test_validate_failure_emits_machine_readable_status(
+    tmp_path,
+    capsys,
+):
+    session_dir = build_synthetic_session(tmp_path)
+
+    (
+        session_dir
+        / "raw"
+        / "trial_events.csv"
+    ).unlink()
+
+    exit_code = main([
+        "validate",
+        str(session_dir),
+    ])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "VALIDATION_STATUS=FAIL" in captured.out
+
+
+def test_finalize_success_emits_machine_readable_status(
+    tmp_path,
+    capsys,
+):
+    session_dir = build_synthetic_session(tmp_path)
+
+    exit_code = main([
+        "finalize",
+        str(session_dir),
+    ])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "FINALIZATION_STATUS=PASS" in captured.out
+
+
+def test_verify_success_emits_machine_readable_status(
+    tmp_path,
+    capsys,
+):
+    session_dir = build_synthetic_session(tmp_path)
+
+    assert main([
+        "finalize",
+        str(session_dir),
+    ]) == 0
+
+    capsys.readouterr()
+
+    exit_code = main([
+        "verify-hashes",
+        str(session_dir),
+    ])
+
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "HASH_VERIFY_STATUS=PASS" in captured.out

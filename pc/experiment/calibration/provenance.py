@@ -278,6 +278,27 @@ def build_calibration_manifest(
         raw_imu_sha256=raw_imu_sha256,
     )
 
+    if (
+        selection["calibration_id"]
+        != calibration_id
+    ):
+        raise ValueError(
+            "source_selection calibration_id "
+            "must match manifest calibration_id."
+        )
+
+    if (
+        selection["calibration_start_pc_ns"]
+        != calibration_start_pc_ns
+        or
+        selection["calibration_end_pc_ns"]
+        != calibration_end_pc_ns
+    ):
+        raise ValueError(
+            "source_selection calibration window "
+            "must match manifest calibration window."
+        )
+
     manifest = {
         "participant_id":
             participant_id,

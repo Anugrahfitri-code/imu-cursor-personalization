@@ -34,6 +34,10 @@ def _build_manifest(
     *,
     raw_imu_sha256=RAW_IMU_SHA256,
     clock_model_sha256=CLOCK_MODEL_SHA256,
+    calibration_start_pc_ns=
+        1_000_000_000_000,
+    calibration_end_pc_ns=
+        1_040_000_000_000,
     source_selection=None,
 ):
     if source_selection is None:
@@ -44,9 +48,9 @@ def _build_manifest(
         session_id="STEST001",
         calibration_id="CAL2C001",
         calibration_start_pc_ns=
-            1_000_000_000_000,
+            calibration_start_pc_ns,
         calibration_end_pc_ns=
-            1_040_000_000_000,
+            calibration_end_pc_ns,
         cycle_count=2,
         reference_trajectory_file=(
             "raw/calibration/"
@@ -162,9 +166,16 @@ def test_changed_raw_hash_changes_provenance():
         _build_manifest()
     )
 
+    changed_selection = _source_selection()
+
+    changed_selection[
+        "source_file_sha256"
+    ] = "D" * 64
+
     changed = calibration_provenance_sha256(
         _build_manifest(
-            raw_imu_sha256="D" * 64
+            raw_imu_sha256="D" * 64,
+            source_selection=changed_selection,
         )
     )
 
@@ -218,9 +229,13 @@ def test_changed_calibration_window_changes_provenance():
         first_selection
     )
 
+    changed_end_pc_ns = (
+        1_040_000_000_000 - 1
+    )
+
     changed_selection[
         "calibration_end_pc_ns"
-    ] -= 1
+    ] = changed_end_pc_ns
 
     first = calibration_provenance_sha256(
         _build_manifest(
@@ -230,7 +245,10 @@ def test_changed_calibration_window_changes_provenance():
 
     changed = calibration_provenance_sha256(
         _build_manifest(
-            source_selection=changed_selection
+            calibration_end_pc_ns=(
+                changed_end_pc_ns
+            ),
+            source_selection=changed_selection,
         )
     )
 
@@ -273,6 +291,29 @@ def test_source_selection_hash_must_match_raw_hash():
     selection["source_file_sha256"] = (
         "F" * 64
     )
+
+    with pytest.raises(ValueError):
+        _build_manifest(
+            source_selection=selection
+        )
+
+def test_source_selection_calibration_id_must_match_manifest():
+    selection = _source_selection()
+
+    selection["calibration_id"] = "OTHER"
+
+    with pytest.raises(ValueError):
+        _build_manifest(
+            source_selection=selection
+        )
+
+
+def test_source_selection_window_must_match_manifest():
+    selection = _source_selection()
+
+    selection[
+        "calibration_end_pc_ns"
+    ] -= 1
 
     with pytest.raises(ValueError):
         _build_manifest(

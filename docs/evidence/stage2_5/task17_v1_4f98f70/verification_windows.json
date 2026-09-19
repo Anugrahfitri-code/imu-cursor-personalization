@@ -1,0 +1,76 @@
+{
+  "baseline_hashes": {
+    "common_grid_sha256": "80CDF5D6EA40265E9E565F2D03D3C6D2DE914538A7C506B8A8D4E50B4925BA92",
+    "preprocessing_config_sha256": "2BBFC2E850461391AA91C6BA137A9A612BAA6EAF9FC51E03C6378D6820112832",
+    "preprocessing_manifest_sha256": "101F02E55E4C5956B47ADD1429AB6018C83F647CEF733B506D9C3E91D861A184",
+    "preprocessing_quality_sha256": "063B72B9EBEB09419C3E6CF0720B70D7CCB1FD6B4FE6BB924BA21E5939394A0D"
+  },
+  "configuration_id": "stage2.5-preprocessing-final-v1.1",
+  "configuration_selection_commit": "5e4aa586807b17b55d3f27e481dd03883a4ed9d7",
+  "dataset_role": "synthetic",
+  "functional_implementation_commit": "4f98f70b8b99faa2a390b67cf7317e53fbf007b7",
+  "limitations": [
+    "Synthetic software qualification only; no real participant or model-performance evidence.",
+    "Clock-fit residuals do not prove absolute synchronization accuracy.",
+    "Mapped-time causality does not prove PC arrival-time availability.",
+    "Native-label manifest chain and Android lifecycle/transport are not qualified.",
+    "Bias stationarity is constructed in this fixture, not inferred from participant recordings."
+  ],
+  "observation_source": "User-supplied Windows PowerShell transcripts, reviewed 2026-09-19; no direct remote execution on the user machine",
+  "publication_state_at_record_creation": "Freeze documentation commit, annotated tag, push and remote verification not yet observed",
+  "qualification": {
+    "check_count": 54,
+    "comparison_evidence": "User compared the two qualification_report.sha256 files with Trim() equality and reported REPRODUCIBLE=True",
+    "passed_check_count": 54,
+    "passed_scenario_count": 23,
+    "report_digest_identical_between_runs": true,
+    "run01_exit_code": 0,
+    "run01_status": "VALID",
+    "run01_uploaded_and_reviewed": true,
+    "run02_exit_code": 0,
+    "run02_separately_uploaded": false,
+    "run02_status": "VALID",
+    "scenario_count": 23
+  },
+  "qualification_report_canonical_sha256": "020A4C121EDE1F177D33DBE6C1E079B27FA53C08B98EF8CF51D626105CFC71E4",
+  "real_participant_data_used": false,
+  "reference_cycles": 2,
+  "reference_sequences": 16,
+  "regression": {
+    "command": "python -m pytest pc -q",
+    "exit_code": 0,
+    "failed": 0,
+    "passed": 672,
+    "seconds": 11.98,
+    "source": "User terminal output after applying Task 17, before committing the unchanged tested code as 4f98f70; subsequent supplied commits only changed documentation"
+  },
+  "reproducibility_digest": "508F3981EFE498ED1ECB19D6C3F2264FC9DBF5C34B45C14E1FB821C16A853B2E",
+  "reproducibility_scope": "Two runs in the tested Windows environment; cross-platform byte identity is not established",
+  "run01_directory": "bench_data/stage2_5_preprocessing_qualification/task17_v1_4f98f70_run01",
+  "run01_inventory_check": {
+    "exit_code": 0,
+    "failed_files": 0,
+    "files_listed": 302,
+    "files_matched": 302,
+    "method": "Pin the canonical report SHA-256, then hash the current bytes of each path listed in artifact_file_sha256 relative to the run01 directory",
+    "report_digest_match": true,
+    "scope": "All 302 report-listed artifacts in run01; does not assert that unlisted files are absent or verify every run02 artifact again"
+  },
+  "run02_directory": "bench_data/stage2_5_preprocessing_qualification/task17_v1_4f98f70_run02",
+  "runtime": {
+    "architecture": "AMD64",
+    "os": "Windows-11-10.0.26200-SP0",
+    "python_full_version": "3.13.0 (tags/v3.13.0:60403a5, Oct  7 2024, 09:38:07) [MSC v.1941 64 bit (AMD64)]"
+  },
+  "source_verification_scope": {
+    "artifact_bytes_and_source_slice_verified": true,
+    "bias_stationarity_verified": false,
+    "clock_only_quality_verified": true,
+    "guided_trajectory_geometry_verified": false,
+    "native_label_manifest_chain_verified": false,
+    "pc_receive_timestamps_available": false,
+    "transport_session_quality_verified": false
+  },
+  "uploaded_report_file_sha256": "BB5AE18A54509A88010AC4DD2E1E618034DCF8A2D133AF380DE719CDF56F3E71",
+  "verification_record_version": "stage2.5-windows-evidence-check-v1.0"
+}

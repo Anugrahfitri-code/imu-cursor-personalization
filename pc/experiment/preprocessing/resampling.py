@@ -327,3 +327,129 @@ def resample_sensor_streams(
         "GYRO":
             gyro_result,
     }
+
+def detect_source_gap_events(
+    *,
+    stream: Sequence[Mapping[str, Any]],
+    expected_interval_ns: int,
+    max_source_gap_ns: int,
+) -> list[dict[str, Any]]:
+    """
+    Detect explicit source-timestamp gaps.
+
+    A gap equal to or smaller than the expected interval
+    is treated as normal sampling variation for this
+    contract.
+
+    A larger gap is classified as BOUNDED_GAP when it is
+    within max_source_gap_ns, otherwise EXCESSIVE_GAP.
+
+    Numeric thresholds supplied here remain configuration
+    values; this function does not freeze participant-study
+    thresholds.
+    """
+    expected_interval = _parse_integer(
+        expected_interval_ns,
+        field_name="expected interval",
+    )
+
+    if expected_interval <= 0:
+        raise ValueError(
+            "expected interval must be positive."
+        )
+
+    gap_limit = _parse_integer(
+        max_source_gap_ns,
+        field_name="source gap limit",
+    )
+
+    if gap_limit < 0:
+        raise ValueError(
+            "source gap limit must be non-negative."
+        )
+
+    timestamps: list[int] = []
+
+    for row_index, row in enumerate(
+        stream,
+        start=1,
+    ):
+        if "pc_mapped_ts_ns" not in row:
+            raise ValueError(
+                "source gap row "
+                f"{row_index} missing "
+                "pc_mapped_ts_ns."
+            )
+
+        timestamp = _parse_integer(
+            row["pc_mapped_ts_ns"],
+            field_name="pc_mapped_ts_ns",
+        )
+
+        timestamps.append(
+            timestamp
+        )
+
+    for index in range(
+        1,
+        len(timestamps),
+    ):
+        if (
+            timestamps[index]
+            < timestamps[index - 1]
+        ):
+            raise ValueError(
+                "source stream must be sorted "
+                "by pc_mapped_ts_ns."
+            )
+
+    events: list[dict[str, Any]] = []
+
+    for index in range(
+        1,
+        len(timestamps),
+    ):
+        previous_timestamp = (
+            timestamps[index - 1]
+        )
+
+        timestamp = timestamps[index]
+
+        observed_gap = (
+            timestamp
+            - previous_timestamp
+        )
+
+        if observed_gap <= expected_interval:
+            continue
+
+        if observed_gap <= gap_limit:
+            event_type = "BOUNDED_GAP"
+        else:
+            event_type = "EXCESSIVE_GAP"
+
+        # Equivalent to ceil(
+        # observed_gap / expected_interval
+        # ) - 1 using integer arithmetic.
+        estimated_missing_count = (
+            observed_gap - 1
+        ) // expected_interval
+
+        events.append(
+            {
+                "event_type":
+                    event_type,
+                "previous_pc_mapped_ts_ns":
+                    previous_timestamp,
+                "pc_mapped_ts_ns":
+                    timestamp,
+                "observed_gap_ns":
+                    observed_gap,
+                "expected_interval_ns":
+                    expected_interval,
+                "estimated_missing_count":
+                    estimated_missing_count,
+            }
+        )
+
+    return events

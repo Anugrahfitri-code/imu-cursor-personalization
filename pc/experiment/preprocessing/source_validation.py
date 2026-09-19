@@ -404,3 +404,193 @@ def normalize_sensor_streams(
         "diagnostics":
             diagnostics,
     }
+
+def apply_stream_anomaly_policy(
+    *,
+    normalized_result: Mapping[str, Any],
+    reorder_policy: str,
+    duplicate_policy: str,
+) -> dict[str, Any]:
+    """
+    Apply explicit deterministic anomaly policies to a
+    previously normalized sensor-stream bundle.
+
+    Reorder detection itself occurs before temporal
+    sorting in normalize_sensor_streams().
+
+    This function records the chosen policy and applies
+    duplicate handling without silently changing rows.
+    """
+    supported_reorder_policies = (
+        "SORT_AND_REPORT",
+    )
+
+    supported_duplicate_policies = (
+        "KEEP_ALL_REPORT",
+        "KEEP_FIRST",
+    )
+
+    if (
+        reorder_policy
+        not in supported_reorder_policies
+    ):
+        raise ValueError(
+            "unsupported reorder policy: "
+            f"{reorder_policy!r}."
+        )
+
+    if (
+        duplicate_policy
+        not in supported_duplicate_policies
+    ):
+        raise ValueError(
+            "unsupported duplicate policy: "
+            f"{duplicate_policy!r}."
+        )
+
+    if "streams" not in normalized_result:
+        raise ValueError(
+            "normalized result missing streams."
+        )
+
+    if "diagnostics" not in normalized_result:
+        raise ValueError(
+            "normalized result missing diagnostics."
+        )
+
+    result = deepcopy(
+        dict(normalized_result)
+    )
+
+    streams = result["streams"]
+    diagnostics = result["diagnostics"]
+
+    diagnostics[
+        "reorder_policy"
+    ] = reorder_policy
+
+    diagnostics[
+        "duplicate_policy"
+    ] = duplicate_policy
+
+    dropped_count = 0
+    dropped_rows: list[dict[str, Any]] = []
+
+    if duplicate_policy == "KEEP_FIRST":
+        for sensor_family in SENSOR_FAMILIES:
+            source_rows = streams.get(
+                sensor_family,
+                [],
+            )
+
+            seen_source_identity: set[
+                tuple[Any, Any]
+            ] = set()
+
+            seen_native_timestamp: set[
+                Any
+            ] = set()
+
+            seen_mapped_timestamp: set[
+                Any
+            ] = set()
+
+            kept_rows: list[
+                dict[str, Any]
+            ] = []
+
+            for row in source_rows:
+                source_identity = (
+                    row["source_file"],
+                    row["source_row_index"],
+                )
+
+                native_timestamp = row[
+                    "phone_sensor_ts_ns"
+                ]
+
+                mapped_timestamp = row[
+                    "pc_mapped_ts_ns"
+                ]
+
+                duplicate_types: list[str] = []
+
+                if (
+                    source_identity
+                    in seen_source_identity
+                ):
+                    duplicate_types.append(
+                        "DUPLICATE_SOURCE_IDENTITY"
+                    )
+
+                if (
+                    native_timestamp
+                    in seen_native_timestamp
+                ):
+                    duplicate_types.append(
+                        "DUPLICATE_NATIVE_TIMESTAMP"
+                    )
+
+                if (
+                    mapped_timestamp
+                    in seen_mapped_timestamp
+                ):
+                    duplicate_types.append(
+                        "DUPLICATE_MAPPED_TIMESTAMP"
+                    )
+
+                # Every original occurrence participates
+                # in first-occurrence bookkeeping even if
+                # this row is dropped for another duplicate
+                # dimension.
+                seen_source_identity.add(
+                    source_identity
+                )
+
+                seen_native_timestamp.add(
+                    native_timestamp
+                )
+
+                seen_mapped_timestamp.add(
+                    mapped_timestamp
+                )
+
+                if duplicate_types:
+                    dropped_count += 1
+
+                    dropped_rows.append(
+                        {
+                            "sensor_family":
+                                sensor_family,
+                            "source_file":
+                                row[
+                                    "source_file"
+                                ],
+                            "source_row_index":
+                                row[
+                                    "source_row_index"
+                                ],
+                            "duplicate_types":
+                                duplicate_types,
+                        }
+                    )
+
+                    continue
+
+                kept_rows.append(
+                    row
+                )
+
+            streams[
+                sensor_family
+            ] = kept_rows
+
+    diagnostics[
+        "policy_duplicate_dropped_count"
+    ] = dropped_count
+
+    diagnostics[
+        "policy_duplicate_dropped_rows"
+    ] = dropped_rows
+
+    return result

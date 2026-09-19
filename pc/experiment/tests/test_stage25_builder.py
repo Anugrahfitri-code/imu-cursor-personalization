@@ -442,7 +442,7 @@ def test_common_grid_rows_match_frozen_schema_and_config_hash():
     )
 
 
-def test_integrated_grid_uses_timestamp_intersection():
+def test_integrated_grid_uses_post_bias_timestamp_intersection():
     result = _build()
 
     rows = result[
@@ -453,7 +453,6 @@ def test_integrated_grid_uses_timestamp_intersection():
         row["grid_pc_time_ns"]
         for row in rows
     ] == [
-        110 * ONE_MS,
         120 * ONE_MS,
         130 * ONE_MS,
     ]
@@ -464,7 +463,6 @@ def test_integrated_grid_uses_timestamp_intersection():
     ] == [
         0,
         1,
-        2,
     ]
 
 

@@ -26,12 +26,10 @@
       "const": "1.0"
     },
     "participant_id": {
-      "type": "string",
-      "minLength": 1
+      "$ref": "#/$defs/nonemptyString"
     },
     "session_id": {
-      "type": "string",
-      "minLength": 1
+      "$ref": "#/$defs/nonemptyString"
     },
     "dataset_role": {
       "type": "string",
@@ -50,7 +48,7 @@
       ]
     },
     "experiment_protocol_version": {
-      "type": "string"
+      "$ref": "#/$defs/nonemptyString"
     },
     "condition_order": {
       "type": "array",
@@ -66,25 +64,183 @@
       }
     },
     "functional_commit": {
-      "type": "string"
+      "$ref": "#/$defs/nonemptyString"
     },
     "experiment_software_version": {
-      "type": "string"
+      "$ref": "#/$defs/nonemptyString"
     },
     "device": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "manufacturer",
+        "model",
+        "android_version",
+        "api_level",
+        "android_session_id"
+      ],
+      "properties": {
+        "manufacturer": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "model": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "android_version": {
+          "$ref": "#/$defs/nonemptyString"
+        },
+        "api_level": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "android_session_id": {
+          "$ref": "#/$defs/nonemptyString"
+        }
+      }
     },
     "display": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "display_width_px",
+        "display_height_px",
+        "experiment_window_width_px",
+        "experiment_window_height_px",
+        "display_scale_factor"
+      ],
+      "properties": {
+        "display_width_px": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "display_height_px": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "experiment_window_width_px": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "experiment_window_height_px": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "display_scale_factor": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
     },
     "android_evidence": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "imu_file",
+        "imu_sha256",
+        "android_metadata_file",
+        "android_metadata_sha256"
+      ],
+      "properties": {
+        "imu_file": {
+          "$ref": "#/$defs/evidencePath"
+        },
+        "imu_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "android_metadata_file": {
+          "$ref": "#/$defs/evidencePath"
+        },
+        "android_metadata_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
     },
     "clock_evidence": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "clock_model_file",
+        "clock_model_sha256",
+        "sync_probes_file",
+        "sync_probes_sha256"
+      ],
+      "properties": {
+        "clock_model_file": {
+          "$ref": "#/$defs/evidencePath"
+        },
+        "clock_model_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sync_probes_file": {
+          "$ref": "#/$defs/evidencePath"
+        },
+        "sync_probes_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
     },
     "files": {
-      "type": "array"
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "relative_path",
+          "sha256",
+          "role"
+        ],
+        "properties": {
+          "relative_path": {
+            "$ref": "#/$defs/evidencePath"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "role": {
+            "$ref": "#/$defs/nonemptyString"
+          }
+        }
+      }
     }
-  }
+  },
+  "$defs": {
+    "nonemptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "evidencePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*[\\\\:\\r\\n\\u0000])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!/)(?!.*//)(?!.*\\s$)(?!\\s)(?!.*?/$).+$",
+      "not": {
+        "enum": [
+          "manifest.json",
+          "SESSION_SHA256SUMS.txt"
+        ]
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "minLength": 64,
+      "maxLength": 64
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "session_status": {
+            "const": "closed"
+          }
+        },
+        "required": [
+          "session_status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "condition_order": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ]
 }

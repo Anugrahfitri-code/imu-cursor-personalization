@@ -2,7 +2,11 @@ import csv
 import json
 from pathlib import Path
 
-from pc.clock_sync.session_quality import QualityRule, evaluate_session
+import pytest
+
+from pc.clock_sync.analyze_sync import analyze_session
+
+from pc.clock_sync.session_quality import QualityEvaluationError, QualityRule, evaluate_session
 
 
 LOCAL_FIELDS = [
@@ -23,9 +27,7 @@ def _write_fixture(
     total_samples: int = 200,
     missing_pc_global: set[int] | None = None,
     payload_mismatch_seq: int | None = None,
-    response_rate: float = 1.0,
-    residual_p95_ms: float = 0.5,
-    residual_max_ms: float = 1.0,
+    clock_jitter_ns: int = 0,
     queue_drops: int = 0,
 ):
     missing_pc_global = missing_pc_global or set()
@@ -99,40 +101,33 @@ def _write_fixture(
                 out["x"] = "9.9"
             writer.writerow(out)
 
-    probe_total = 120
-    probe_valid = round(probe_total * response_rate)
-    probe_invalid = probe_total - probe_valid
-    actual_response_rate = probe_valid / probe_total
-
+    # Real timestamp exchanges; the official analyzer owns the saved model.
+    # Alternating offsets exercise the numerical residual gates when requested.
     with sync.open("w", newline="", encoding="utf-8") as handle:
-        fieldnames = ["session_id", "probe_phase", "probe_seq", "response_valid", "invalid_reason"]
+        fieldnames = [
+            "session_id", "probe_phase", "probe_seq", "response_valid", "invalid_reason",
+            "t1_pc_ns", "t2_phone_ns", "t3_phone_ns", "t4_pc_ns",
+        ]
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        for probe_seq in range(1, probe_total + 1):
-            is_valid = probe_seq <= probe_valid
+        for probe_seq in range(1, 121):
+            burst = (probe_seq - 61) // 5
+            phone_mid = 1_000_000_000_000 + probe_seq * 2_000_000_000
+            pc_mid = phone_mid + 4_000_000_000
+            if probe_seq > 60:
+                pc_mid += clock_jitter_ns * (1 if burst % 2 else -1)
             writer.writerow({
                 "session_id": "test-run",
-                "probe_phase": "background",
-                "probe_seq": str(probe_seq),
-                "response_valid": "True" if is_valid else "False",
-                "invalid_reason": "" if is_valid else "timeout",
+                "probe_phase": "startup" if probe_seq <= 60 else "background",
+                "probe_seq": probe_seq,
+                "response_valid": "True",
+                "invalid_reason": "",
+                "t1_pc_ns": pc_mid - 20_100_000,
+                "t2_phone_ns": phone_mid - 100_000,
+                "t3_phone_ns": phone_mid + 100_000,
+                "t4_pc_ns": pc_mid + 20_100_000,
             })
-
-    model.write_text(json.dumps({
-        "model": "affine_phone_to_pc",
-        "alpha": 0.99999,
-        "beta_ns": -1000.0,
-        "skew_ppm": -10.0,
-        "response_rate": actual_response_rate,
-        "probe_counts": {
-            "sent": probe_total,
-            "valid": probe_valid,
-            "invalid": probe_invalid,
-        },
-        "absolute_residual_ms": {"p50": 0.2, "p95": residual_p95_ms, "max": residual_max_ms},
-        "delay_like_ms": {"p50": 5.0, "p95": 20.0},
-        "phone_processing_ms": {"p50": 0.2, "p95": 0.3},
-    }), encoding="utf-8")
+    analyze_session(root)
 
     return meta, local, pc, model, sync
 
@@ -156,12 +151,24 @@ def test_clean_session_passes(tmp_path):
 
 
 def test_clock_response_below_95_percent_fails(tmp_path):
-    report = _evaluate(_write_fixture(tmp_path, response_rate=0.94))
+    paths = _write_fixture(tmp_path)
+    rows = _probe_rows(paths)
+    for row in rows[:8]:
+        row["response_valid"] = "False"
+        row["invalid_reason"] = "timeout"
+    _write_probe_rows(paths, rows)
+    # Keep the low-rate artifact internally consistent; analyzer itself correctly
+    # refuses such a session, so this must never become a quality PASS.
+    data = json.loads(paths[3].read_text())
+    data["response_rate"] = 112 / 120
+    data["probe_counts"].update(valid=112, invalid=8)
+    paths[3].write_text(json.dumps(data))
+    report = _evaluate(paths)
     assert "CLOCK_RESPONSE_RATE" in report["failed_gates"]
 
 
 def test_clock_residual_boundaries_are_hard_gates(tmp_path):
-    report = _evaluate(_write_fixture(tmp_path, residual_p95_ms=1.001, residual_max_ms=5.001))
+    report = _evaluate(_write_fixture(tmp_path, clock_jitter_ns=8_000_000))
     assert "CLOCK_RESIDUAL_P95" in report["failed_gates"]
     assert "CLOCK_RESIDUAL_MAX" in report["failed_gates"]
 
@@ -220,8 +227,7 @@ def test_sync_probe_session_identity_mismatch_fails(tmp_path):
     rows = list(csv.DictReader(sync.open(newline="", encoding="utf-8")))
     rows[0]["session_id"] = "foreign-run"
     with sync.open("w", newline="", encoding="utf-8") as handle:
-        fieldnames = ["session_id", "probe_phase", "probe_seq", "response_valid", "invalid_reason"]
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
 
@@ -240,3 +246,179 @@ def test_clock_model_must_match_sync_probe_counts(tmp_path):
 
     report = _evaluate(paths)
     assert "CLOCK_ARTIFACT_CONSISTENCY" in report["failed_gates"]
+
+
+def _probe_rows(paths):
+    with paths[4].open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _write_probe_rows(paths, rows):
+    with paths[4].open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+@pytest.mark.parametrize("field", ["alpha", "beta_ns"])
+def test_clock_parameters_are_required(tmp_path, field):
+    paths = _write_fixture(tmp_path)
+    data = json.loads(paths[3].read_text())
+    del data[field]
+    paths[3].write_text(json.dumps(data))
+    with pytest.raises(QualityEvaluationError):
+        _evaluate(paths)
+
+
+@pytest.mark.parametrize("field", ["alpha", "beta_ns"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_clock_parameters_must_be_finite(tmp_path, field, value):
+    paths = _write_fixture(tmp_path)
+    data = json.loads(paths[3].read_text())
+    data[field] = value
+    paths[3].write_text(json.dumps(data))
+    with pytest.raises(QualityEvaluationError):
+        _evaluate(paths)
+
+
+def test_probe_timestamp_columns_are_required(tmp_path):
+    paths = _write_fixture(tmp_path)
+    rows = _probe_rows(paths)
+    for row in rows:
+        for field in ("t1_pc_ns", "t2_phone_ns", "t3_phone_ns", "t4_pc_ns"):
+            del row[field]
+    _write_probe_rows(paths, rows)
+    with pytest.raises(QualityEvaluationError):
+        _evaluate(paths)
+
+
+def test_valid_probe_must_contain_reconstructable_timestamps(tmp_path):
+    paths = _write_fixture(tmp_path)
+    rows = _probe_rows(paths)
+    rows[0]["t2_phone_ns"] = ""
+    _write_probe_rows(paths, rows)
+    with pytest.raises(QualityEvaluationError):
+        _evaluate(paths)
+
+
+@pytest.mark.parametrize("field,delta", [("alpha", 0.000001), ("beta_ns", 10_000_000)])
+def test_saved_clock_mapping_must_match_raw_probe_fit(tmp_path, field, delta):
+    paths = _write_fixture(tmp_path)
+    data = json.loads(paths[3].read_text())
+    data[field] += delta
+    paths[3].write_text(json.dumps(data))
+    report = _evaluate(paths)
+    assert report["final_session_status"] == "FAIL"
+    assert "CLOCK_ARTIFACT_CONSISTENCY" in report["failed_gates"]
+
+
+def test_stale_clock_model_rejected_when_probe_timing_changes(tmp_path):
+    paths = _write_fixture(tmp_path)
+    rows = _probe_rows(paths)
+    for row in rows:
+        row["t2_phone_ns"] = str(int(row["t2_phone_ns"]) + 10_000_000)
+        row["t3_phone_ns"] = str(int(row["t3_phone_ns"]) + 10_000_000)
+    _write_probe_rows(paths, rows)
+    report = _evaluate(paths)
+    assert report["final_session_status"] == "FAIL"
+    assert "CLOCK_ARTIFACT_CONSISTENCY" in report["failed_gates"]
+
+
+def test_residual_gate_uses_reconstructed_evidence_not_saved_claim(tmp_path):
+    paths = _write_fixture(tmp_path, clock_jitter_ns=8_000_000)
+    data = json.loads(paths[3].read_text())
+    data["absolute_residual_ms"] = {"p50": 0.0, "p95": 0.0, "max": 0.0}
+    paths[3].write_text(json.dumps(data))
+    report = _evaluate(paths)
+    assert report["final_session_status"] == "FAIL"
+    assert "CLOCK_ARTIFACT_CONSISTENCY" in report["failed_gates"]
+    assert "CLOCK_RESIDUAL_P95" in report["failed_gates"]
+    assert "CLOCK_RESIDUAL_MAX" in report["failed_gates"]
+
+
+def _verify_clock(paths, *, expected_session_id="test-run", rule=QualityRule()):
+    from pc.clock_sync import session_quality
+
+    verify = getattr(session_quality, "verify_clock_artifacts", None)
+    assert callable(verify), "public artifact-only clock verifier is required"
+    return verify(
+        clock_model_path=paths[3],
+        sync_probes_path=paths[4],
+        expected_session_id=expected_session_id,
+        rule=rule,
+    )
+
+
+def test_artifact_clock_verification_accepts_matching_evidence_without_mutation(tmp_path):
+    paths = _write_fixture(tmp_path)
+    before = {p: p.read_bytes() for p in paths[3:]}
+    report = _verify_clock(paths)
+    assert report["passed"] is True
+    assert report["consistency"]["passed"] is True
+    assert report["session_ids"] == ["test-run"]
+    assert report["identity_matches"] is True
+    assert report["failed_gates"] == []
+    assert report["clock"]["alpha"] == 1.0
+    assert report["clock"]["beta_ns"] == 4_000_000_000
+    assert before == {p: p.read_bytes() for p in paths[3:]}
+
+
+def test_artifact_clock_verification_rejects_foreign_session(tmp_path):
+    report = _verify_clock(_write_fixture(tmp_path), expected_session_id="other-run")
+    assert report["passed"] is False
+    assert "SESSION_IDENTITY" in report["failed_gates"]
+
+
+def test_artifact_clock_verification_rejects_stale_model(tmp_path):
+    paths = _write_fixture(tmp_path)
+    data = json.loads(paths[3].read_text())
+    data["beta_ns"] += 10_000_000
+    paths[3].write_text(json.dumps(data))
+    report = _verify_clock(paths)
+    assert report["passed"] is False
+    assert "CLOCK_ARTIFACT_CONSISTENCY" in report["failed_gates"]
+
+
+@pytest.mark.parametrize("artifact", [3, 4])
+def test_artifact_clock_verification_missing_files_raise_quality_error(tmp_path, artifact):
+    paths = _write_fixture(tmp_path)
+    paths[artifact].unlink()
+    with pytest.raises(QualityEvaluationError):
+        _verify_clock(paths)
+
+
+@pytest.mark.parametrize("artifact", [3, 4])
+def test_artifact_clock_verification_malformed_files_raise_quality_error(tmp_path, artifact):
+    paths = _write_fixture(tmp_path)
+    paths[artifact].write_text("malformed")
+    with pytest.raises(QualityEvaluationError):
+        _verify_clock(paths)
+
+
+@pytest.mark.parametrize("gate,rule", [
+    ("CLOCK_RESPONSE_RATE", QualityRule(min_clock_response_rate=1.01)),
+    ("CLOCK_RESIDUAL_P95", QualityRule(max_clock_residual_p95_ms=-1.0)),
+    ("CLOCK_RESIDUAL_MAX", QualityRule(max_clock_residual_max_ms=-1.0)),
+    ("CLOCK_SKEW_SANITY", QualityRule(skew_sanity_ppm=0.0)),
+])
+def test_artifact_clock_verification_applies_supplied_quality_rule(tmp_path, gate, rule):
+    report = _verify_clock(_write_fixture(tmp_path), rule=rule)
+    assert report["passed"] is False
+    assert gate in report["failed_gates"]
+
+
+def test_artifact_clock_verification_enforces_frozen_residual_limits(tmp_path):
+    report = _verify_clock(_write_fixture(tmp_path, clock_jitter_ns=8_000_000))
+    assert report["passed"] is False
+    assert "CLOCK_RESIDUAL_P95" in report["failed_gates"]
+    assert "CLOCK_RESIDUAL_MAX" in report["failed_gates"]
+
+
+def test_artifact_clock_verification_rejects_unknown_model_type(tmp_path):
+    paths = _write_fixture(tmp_path)
+    data = json.loads(paths[3].read_text())
+    data["model"] = "unknown_mapping"
+    paths[3].write_text(json.dumps(data))
+    report = _verify_clock(paths)
+    assert report["passed"] is False
+    assert "CLOCK_MODEL_RECONSTRUCTABLE" in report["failed_gates"]

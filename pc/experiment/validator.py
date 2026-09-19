@@ -9,8 +9,15 @@ from pc.experiment.csv_schema import (
     validate_header,
 )
 from pc.experiment.manifest import (
+    EVIDENCE_FIELDS,
     load_manifest,
     validate_manifest,
+)
+from pc.experiment.session_hash import (
+    HASH_MANIFEST_NAME,
+    session_file_path,
+    sha256_file,
+    verify_session_hash_manifest,
 )
 
 
@@ -97,7 +104,11 @@ def validate_session(
         return ValidationReport(tuple(issues))
 
     # 2. Manifest exists and parses.
-    manifest_path = session_dir / "manifest.json"
+    try:
+        manifest_path = session_file_path(session_dir, "manifest.json")
+    except (OSError, ValueError) as exc:
+        _issue(issues, "MANIFEST_PATH_INVALID", str(exc))
+        return ValidationReport(tuple(issues))
 
     if not manifest_path.is_file():
         _issue(
@@ -133,9 +144,36 @@ def validate_session(
             error,
         )
 
+    # A previously sealed session must not be silently rebaselined by finalize.
+    hash_path = session_dir / HASH_MANIFEST_NAME
+    if hash_path.exists() or hash_path.is_symlink():
+        for error in verify_session_hash_manifest(session_dir):
+            _issue(issues, "SESSION_HASH_INVALID", error)
+
+    # Required nested evidence and supplemental declarations are content-bound.
+    if not manifest_errors:
+        references = []
+        for section, pairs in EVIDENCE_FIELDS.items():
+            for path_field, hash_field in pairs:
+                references.append((manifest[section][path_field], manifest[section][hash_field]))
+        references.extend((entry["relative_path"], entry["sha256"]) for entry in manifest["files"])
+        for relative_path, expected_hash in references:
+            try:
+                path = session_file_path(session_dir, relative_path)
+                if not path.is_file():
+                    raise ValueError(f"Referenced evidence does not exist: {relative_path}")
+                if sha256_file(path) != expected_hash.upper():
+                    raise ValueError(f"SHA-256 mismatch for referenced evidence: {relative_path}")
+            except (OSError, ValueError) as exc:
+                _issue(issues, "EVIDENCE_INVALID", str(exc))
+
     # 4. Required raw CSV files exist.
     for relative_path in REQUIRED_RAW_CSV_PATHS:
-        path = session_dir / relative_path
+        try:
+            path = session_file_path(session_dir, relative_path)
+        except (OSError, ValueError) as exc:
+            _issue(issues, "REQUIRED_FILE_INVALID", str(exc))
+            continue
 
         if not path.is_file():
             _issue(
@@ -151,7 +189,11 @@ def validate_session(
     ] = {}
 
     for relative_path, expected_header in CSV_SCHEMAS.items():
-        path = session_dir / relative_path
+        try:
+            path = session_file_path(session_dir, relative_path)
+        except (OSError, ValueError) as exc:
+            _issue(issues, "CSV_PATH_INVALID", str(exc))
+            continue
 
         if not path.is_file():
             continue
@@ -241,6 +283,8 @@ def validate_session(
                         f"invalid condition_code={condition_code!r}."
                     ),
                 )
+            elif isinstance(manifest.get("condition_order"), list) and condition_code not in manifest["condition_order"]:
+                _issue(issues, "UNDECLARED_CONDITION", f"{relative_path}:{row_number}: condition is absent from condition_order: {condition_code}")
 
     trial_rows = csv_rows.get(
         "raw/trial_events.csv",
@@ -254,6 +298,8 @@ def validate_session(
         "raw/calibration_events.csv",
         [],
     )
+    if manifest.get("session_status") == "closed" and not (trial_rows or calibration_rows):
+        _issue(issues, "EMPTY_SESSION", "Closed session requires trial or calibration event content.")
 
     # 9. Unique event_id.
     seen_event_ids: set[str] = set()

@@ -166,6 +166,13 @@ def _validate_source_artifacts(
             "source artifact mappings must not be empty."
         )
 
+    required_sources = {"mapped_sensor_times", "reference_trajectory", "clock_model"}
+    if not required_sources.issubset(source_paths):
+        raise ValueError(
+            "required source artifacts are missing: "
+            f"{sorted(required_sources - set(source_paths))!r}."
+        )
+
     normalized_paths: dict[str, str] = {}
     normalized_hashes: dict[str, str] = {}
 
@@ -311,6 +318,10 @@ def validate_preprocessing_config(
         )
     )
 
+    if not math.isclose(grid_frequency_hz, 1_000_000_000 / grid_interval_ns,
+                        rel_tol=1e-9, abs_tol=0.0):
+        raise ValueError("grid frequency must equal 1e9 / grid_interval_ns.")
+
     grid_origin_rule = (
         _require_nonempty_string(
             config["grid_origin_rule"],
@@ -406,6 +417,14 @@ def validate_preprocessing_config(
         config["low_pass_filter"],
         field_name="low_pass_filter",
     )
+
+    filter_frequency = _parse_positive_float(
+        low_pass_filter.get("grid_frequency_hz"),
+        field_name="low_pass_filter.grid_frequency_hz",
+    )
+    if not math.isclose(filter_frequency, grid_frequency_hz,
+                        rel_tol=1e-9, abs_tol=0.0):
+        raise ValueError("filter frequency must match the common grid frequency.")
 
     filter_reset_policy = (
         _require_nonempty_string(

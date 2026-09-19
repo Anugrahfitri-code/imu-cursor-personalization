@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from pc.experiment.manifest import (
     MANIFEST_REQUIRED_FIELDS,
     validate_manifest,
@@ -127,3 +129,78 @@ def test_json_schema_required_fields_match_python_contract():
     assert set(schema_required) == set(
         MANIFEST_REQUIRED_FIELDS
     )
+
+
+@pytest.mark.parametrize("field", MANIFEST_REQUIRED_FIELDS)
+def test_required_manifest_values_cannot_be_null(field):
+    manifest = copy.deepcopy(VALID_MANIFEST)
+    manifest[field] = None
+    assert validate_manifest(manifest)
+
+
+@pytest.mark.parametrize("section,field", [
+    ("device", "model"), ("device", "api_level"),
+    ("display", "display_width_px"), ("display", "display_scale_factor"),
+    ("android_evidence", "imu_file"), ("android_evidence", "imu_sha256"),
+    ("clock_evidence", "clock_model_file"), ("clock_evidence", "sync_probes_sha256"),
+])
+def test_nested_required_evidence_cannot_be_missing(section, field):
+    manifest = copy.deepcopy(VALID_MANIFEST)
+    del manifest[section][field]
+    assert validate_manifest(manifest)
+
+
+@pytest.mark.parametrize("section,field,value", [
+    ("device", "api_level", True),
+    ("display", "display_width_px", "1920"),
+    ("display", "display_scale_factor", 0),
+    ("display", "display_scale_factor", float("nan")),
+    ("android_evidence", "imu_file", "../outside.csv"),
+    ("android_evidence", "imu_file", "/outside.csv"),
+    ("android_evidence", "imu_file", "C:/outside.csv"),
+    ("android_evidence", "imu_file", "manifest.json"),
+    ("clock_evidence", "clock_model_sha256", "not-a-hash"),
+])
+def test_manifest_rejects_invalid_nested_values(section, field, value):
+    manifest = copy.deepcopy(VALID_MANIFEST)
+    manifest[section][field] = value
+    assert validate_manifest(manifest)
+
+
+@pytest.mark.parametrize("files", [
+    ["raw/imu/imu.csv"], [{}],
+    [{"relative_path": "../outside", "sha256": "0" * 64, "role": "evidence"}],
+    [{"relative_path": "raw/imu/imu.csv", "sha256": "bad", "role": "evidence"}],
+    [{"relative_path": "raw/imu/imu.csv", "sha256": "0" * 64, "role": ""}],
+])
+def test_manifest_validates_declared_file_entries(files):
+    manifest = copy.deepcopy(VALID_MANIFEST)
+    manifest["files"] = files
+    assert validate_manifest(manifest)
+
+
+def test_closed_session_requires_usable_condition_order():
+    manifest = copy.deepcopy(VALID_MANIFEST)
+    manifest["condition_order"] = []
+    assert validate_manifest(manifest)
+    manifest["session_status"] = "open"
+    assert validate_manifest(manifest) == []
+
+
+def test_distinct_required_sources_cannot_alias_one_file():
+    manifest = copy.deepcopy(VALID_MANIFEST)
+    manifest["clock_evidence"]["clock_model_file"] = manifest["android_evidence"]["imu_file"]
+    assert validate_manifest(manifest)
+
+
+def test_python_rejects_unknown_top_level_field_like_schema():
+    manifest = copy.deepcopy(VALID_MANIFEST)
+    manifest["unrecognized_typo"] = "value"
+    assert validate_manifest(manifest)
+
+
+def test_integral_json_numbers_are_accepted_for_integer_metadata():
+    manifest = copy.deepcopy(VALID_MANIFEST)
+    manifest["device"]["api_level"] = 36.0
+    manifest["display"]["display_width_px"] = 1920.0
+    assert validate_manifest(manifest) == []

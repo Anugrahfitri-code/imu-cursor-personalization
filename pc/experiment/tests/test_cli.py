@@ -209,3 +209,12 @@ def test_verify_success_emits_machine_readable_status(
 
     assert exit_code == 0
     assert "HASH_VERIFY_STATUS=PASS" in captured.out
+
+
+def test_finalize_refuses_to_rebaseline_corrupted_existing_inventory(tmp_path):
+    session_dir = build_synthetic_session(tmp_path)
+    assert main(["finalize", str(session_dir)]) == 0
+    hash_path = session_dir / HASH_MANIFEST_NAME
+    hash_path.write_text("", encoding="utf-8")
+    assert main(["finalize", str(session_dir)]) == 1
+    assert hash_path.read_bytes() == b""

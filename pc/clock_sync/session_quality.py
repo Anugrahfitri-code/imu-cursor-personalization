@@ -8,6 +8,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from pc.clock_sync.analyze_sync import _half_summary, _residual_summary, _row_to_probe
+from pc.clock_sync.clock_model import (
+    ProbeObservation, fit_half_diagnostics, fit_robust_clock_model, percentile,
+)
+
 
 RULE_VERSION = "v1.0-frozen"
 EXPECTED_DEVICE_MODEL = "SM-A175F"
@@ -297,6 +302,55 @@ def _transport_integrity(
     }
 
 
+def _clock_values(data: dict[str, Any]) -> dict[str, float | int]:
+    """Validate the numerical schema emitted by the official frozen analyzer."""
+    sections = {
+        "": ("alpha", "beta_ns", "skew_ppm", "response_rate"),
+        "absolute_residual_ms": ("p50", "p95", "max"),
+        "delay_like_ms": ("p50", "p95"),
+        "phone_processing_ms": ("p50", "p95"),
+        "first_half": ("alpha", "skew_ppm", "residual_p50_ms", "residual_p95_ms"),
+        "second_half": ("alpha", "skew_ppm", "residual_p50_ms", "residual_p95_ms"),
+        "probe_counts": ("sent", "valid", "invalid", "selected", "inliers"),
+    }
+    values: dict[str, float | int] = {}
+    try:
+        for section, fields in sections.items():
+            source = data[section] if section else data
+            for field in fields:
+                key = f"{section}.{field}" if section else field
+                value = source[field]
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError(f"{key} must be numeric")
+                if not math.isfinite(value):
+                    raise ValueError(f"{key} must be finite")
+                if section == "probe_counts" and (not isinstance(value, int) or value < 0):
+                    raise ValueError(f"{key} must be a nonnegative integer")
+                values[key] = value
+        if values["alpha"] <= 0:
+            raise ValueError("alpha must be positive")
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise QualityEvaluationError(f"invalid clock model schema: {exc}") from exc
+    return values
+
+
+def _clock_summary(data: dict[str, Any]) -> dict[str, Any]:
+    values = _clock_values(data)
+    return {
+        "model_present": True,
+        "model": data.get("model"),
+        "alpha": values["alpha"],
+        "beta_ns": values["beta_ns"],
+        "response_rate": values["response_rate"],
+        "skew_ppm": values["skew_ppm"],
+        "residual_p50_ms": values["absolute_residual_ms.p50"],
+        "residual_p95_ms": values["absolute_residual_ms.p95"],
+        "residual_max_ms": values["absolute_residual_ms.max"],
+        "probe_counts": data["probe_counts"],
+        "model_values": values,
+    }
+
+
 def _clock_metrics(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -304,44 +358,84 @@ def _clock_metrics(path: Path) -> dict[str, Any]:
         return {"model_present": False}
     except json.JSONDecodeError as exc:
         raise QualityEvaluationError(f"invalid clock model JSON: {exc}") from exc
+    return _clock_summary(data)
 
-    return {
-        "model_present": True,
-        "model": data.get("model"),
-        "response_rate": float(data["response_rate"]),
-        "skew_ppm": float(data["skew_ppm"]),
-        "residual_p50_ms": float(data["absolute_residual_ms"]["p50"]),
-        "residual_p95_ms": float(data["absolute_residual_ms"]["p95"]),
-        "residual_max_ms": float(data["absolute_residual_ms"]["max"]),
-        "probe_counts": data.get("probe_counts", {}),
-    }
+
+def _reconstruct_clock(probes: list[ProbeObservation], total: int) -> dict[str, Any]:
+    # The frozen analyzer exposes no per-run fit settings: use its same robust
+    # fit, low-delay selection, half diagnostics, and residual summaries. Unlike
+    # analyze_session, this path does not rewrite any evidence artifacts.
+    try:
+        model = fit_robust_clock_model(probes)
+        first, second = fit_half_diagnostics(probes)
+        return _clock_summary({
+            "model": "affine_phone_to_pc",
+            "alpha": model.alpha,
+            "beta_ns": model.beta_ns,
+            "skew_ppm": model.skew_ppm,
+            "response_rate": len(probes) / total,
+            "probe_counts": {
+                "sent": total,
+                "valid": len(probes),
+                "invalid": total - len(probes),
+                "selected": len(model.selected_probe_seqs),
+                "inliers": len(model.inlier_probe_seqs),
+            },
+            "absolute_residual_ms": _residual_summary(model),
+            "delay_like_ms": {
+                label: percentile((p.delay_like_ns for p in probes), q) / 1_000_000
+                for label, q in (("p50", 0.5), ("p95", 0.95))
+            },
+            "phone_processing_ms": {
+                label: percentile((p.phone_processing_ns for p in probes), q) / 1_000_000
+                for label, q in (("p50", 0.5), ("p95", 0.95))
+            },
+            "first_half": _half_summary(first),
+            "second_half": _half_summary(second),
+        })
+    except (ValueError, OverflowError) as exc:
+        raise QualityEvaluationError(f"clock model cannot be reconstructed: {exc}") from exc
 
 
 def _sync_probe_metrics(path: Path) -> dict[str, Any]:
     rows = _read_csv(path)
-    required = {"session_id", "probe_seq", "response_valid", "invalid_reason"}
+    required = {
+        "session_id", "probe_phase", "probe_seq", "response_valid", "invalid_reason",
+        "t1_pc_ns", "t2_phone_ns", "t3_phone_ns", "t4_pc_ns",
+    }
     _assert_fields(rows, required, "Clock sync probes")
 
     session_ids = sorted({row["session_id"].strip() for row in rows})
-    valid = 0
+    probes: list[ProbeObservation] = []
     invalid_reason_counts: dict[str, int] = {}
     for row in rows:
-        is_valid = str(row["response_valid"]).strip().lower() == "true"
-        if is_valid:
-            valid += 1
+        flag = str(row["response_valid"]).strip().lower()
+        if flag not in {"true", "false"}:
+            raise QualityEvaluationError("clock response_valid must be True or False")
+        if flag == "true":
+            try:
+                probe = _row_to_probe(row)
+            except (KeyError, TypeError, AttributeError) as exc:
+                raise QualityEvaluationError("invalid clock probe timestamp fields") from exc
+            if probe is None:
+                raise QualityEvaluationError(
+                    f"valid clock probe {row['probe_seq']} has invalid timestamps"
+                )
+            probes.append(probe)
         else:
             reason = row.get("invalid_reason", "").strip() or "unspecified"
             invalid_reason_counts[reason] = invalid_reason_counts.get(reason, 0) + 1
 
     total = len(rows)
-    invalid = total - valid
+    valid = len(probes)
     return {
         "rows": total,
         "session_ids": session_ids,
         "valid": valid,
-        "invalid": invalid,
+        "invalid": total - valid,
         "response_rate": valid / total,
         "invalid_reason_counts": invalid_reason_counts,
+        "reconstructed_clock": _reconstruct_clock(probes, total),
     }
 
 
@@ -396,8 +490,24 @@ def _clock_artifact_consistency(clock: dict[str, Any], sync: dict[str, Any]) -> 
     model_invalid = int(counts.get("invalid", -1))
     model_rate = float(clock["response_rate"])
 
+    reconstructed = sync["reconstructed_clock"]["model_values"]
+    mismatched_fields = []
+    for key, expected in reconstructed.items():
+        observed = clock["model_values"][key]
+        if key.startswith("probe_counts."):
+            matches = observed == expected
+        else:
+            # Serialization/float tolerance, not a scientific quality threshold.
+            tolerance = 1.0 if key == "beta_ns" else 1e-6
+            if key.endswith("alpha") or key == "response_rate":
+                tolerance = 1e-12
+            matches = math.isclose(observed, expected, rel_tol=0.0, abs_tol=tolerance)
+        if not matches:
+            mismatched_fields.append(key)
+
     passed = (
-        model_sent == sync["rows"]
+        not mismatched_fields
+        and model_sent == sync["rows"]
         and model_valid == sync["valid"]
         and model_invalid == sync["invalid"]
         and math.isclose(model_rate, sync["response_rate"], rel_tol=0.0, abs_tol=1e-12)
@@ -411,8 +521,103 @@ def _clock_artifact_consistency(clock: dict[str, Any], sync: dict[str, Any]) -> 
         "sync_valid": sync["valid"],
         "model_invalid": model_invalid,
         "sync_invalid": sync["invalid"],
+        "mismatched_model_fields": mismatched_fields,
         "model_response_rate": model_rate,
         "sync_response_rate": sync["response_rate"],
+    }
+
+
+def _clock_quality_gates(clock: dict[str, Any], rule: QualityRule) -> list[GateResult]:
+    return [
+        GateResult(
+            "CLOCK_MODEL_RECONSTRUCTABLE",
+            bool(clock.get("model_present")) and clock.get("model") == "affine_phone_to_pc",
+            clock.get("model") if clock.get("model_present") else None,
+            "official affine clock model reconstructed from raw timestamp exchanges",
+        ),
+        GateResult(
+            "CLOCK_RESPONSE_RATE",
+            bool(clock.get("model_present"))
+            and clock["response_rate"] >= rule.min_clock_response_rate,
+            clock.get("response_rate"),
+            f">= {rule.min_clock_response_rate:.3f}",
+        ),
+        GateResult(
+            "CLOCK_RESIDUAL_P95",
+            bool(clock.get("model_present"))
+            and clock["residual_p95_ms"] <= rule.max_clock_residual_p95_ms,
+            clock.get("residual_p95_ms"),
+            f"<= {rule.max_clock_residual_p95_ms:.3f} ms",
+        ),
+        GateResult(
+            "CLOCK_RESIDUAL_MAX",
+            bool(clock.get("model_present"))
+            and clock["residual_max_ms"] <= rule.max_clock_residual_max_ms,
+            clock.get("residual_max_ms"),
+            f"<= {rule.max_clock_residual_max_ms:.3f} ms",
+        ),
+        GateResult(
+            "CLOCK_SKEW_SANITY",
+            bool(clock.get("model_present"))
+            and abs(clock["skew_ppm"]) < rule.skew_sanity_ppm,
+            clock.get("skew_ppm"),
+            f"abs(skew_ppm) < {rule.skew_sanity_ppm:.1f}",
+        ),
+    ]
+
+
+def verify_clock_artifacts(
+    *,
+    clock_model_path: Path,
+    sync_probes_path: Path,
+    expected_session_id: str,
+    rule: QualityRule = QualityRule(),
+) -> dict[str, Any]:
+    """Verify clock evidence read-only; this is not full session qualification.
+
+    The returned ``clock`` contains reconstructed affine parameters and metrics.
+    ``passed`` requires matching session identity, a consistent saved model, and
+    all five frozen clock quality gates. Device and transport qualification are
+    outside this boundary. Missing/malformed evidence raises QualityEvaluationError;
+    valid evidence that mismatches or fails a quality threshold returns passed=False.
+    """
+    try:
+        saved_clock = _clock_metrics(clock_model_path)
+        if not saved_clock.get("model_present"):
+            raise QualityEvaluationError(f"clock model missing: {clock_model_path}")
+        sync = _sync_probe_metrics(sync_probes_path)
+    except (OSError, UnicodeError, csv.Error, AttributeError, TypeError) as exc:
+        raise QualityEvaluationError(f"invalid clock artifact: {exc}") from exc
+
+    consistency = _clock_artifact_consistency(saved_clock, sync)
+    identity_matches = (
+        isinstance(expected_session_id, str)
+        and bool(expected_session_id.strip())
+        and sync["session_ids"] == [expected_session_id]
+    )
+    clock = sync["reconstructed_clock"]
+    # Gate the declared model type while taking numerical evidence from raw fit.
+    gate_clock = {**clock, "model": saved_clock.get("model")}
+    gates = [
+        GateResult(
+            "SESSION_IDENTITY", identity_matches, sync["session_ids"],
+            "sync-probe session identity equals expected_session_id",
+        ),
+        GateResult(
+            "CLOCK_ARTIFACT_CONSISTENCY", consistency["passed"], consistency,
+            "saved clock model matches reconstruction from raw timestamp exchanges",
+        ),
+        *_clock_quality_gates(gate_clock, rule),
+    ]
+    return {
+        "passed": all(gate.passed for gate in gates),
+        "consistency": consistency,
+        "clock": clock,
+        "session_ids": sync["session_ids"],
+        "expected_session_id": expected_session_id,
+        "identity_matches": identity_matches,
+        "gates": [asdict(gate) for gate in gates],
+        "failed_gates": [gate.name for gate in gates if not gate.passed],
     }
 
 
@@ -435,6 +640,9 @@ def evaluate_session(
     sync = _sync_probe_metrics(sync_probes_path)
     identity = _identity_metrics(local_rows, pc_rows, sync, meta)
     clock_consistency = _clock_artifact_consistency(clock, sync)
+    if clock.get("model_present") and clock.get("model") == "affine_phone_to_pc":
+        # All numerical gates consume reconstructed evidence, never saved claims.
+        clock = sync["reconstructed_clock"]
 
     local_monotonic = all(local["per_sensor_timestamp_monotonic"].values())
     local_sensor_seq_contiguous = all(local["per_sensor_seq_contiguous"].values())
@@ -456,7 +664,7 @@ def evaluate_session(
             "CLOCK_ARTIFACT_CONSISTENCY",
             clock_consistency["passed"],
             {k: v for k, v in clock_consistency.items() if k != "passed"},
-            "clock_model probe counts/response rate exactly match sync_probes.csv",
+            "clock_model parameters, counts, and diagnostics match reconstruction from sync_probes.csv",
         ),
         GateResult(
             "LOCAL_SEQUENCE_INTEGRITY",
@@ -500,40 +708,7 @@ def evaluate_session(
             },
             "queue drops/errors/remaining = 0 and UDP sent == total samples",
         ),
-        GateResult(
-            "CLOCK_MODEL_RECONSTRUCTABLE",
-            bool(clock.get("model_present")) and clock.get("model") == "affine_phone_to_pc",
-            clock.get("model") if clock.get("model_present") else None,
-            "official affine clock model exists",
-        ),
-        GateResult(
-            "CLOCK_RESPONSE_RATE",
-            bool(clock.get("model_present"))
-            and clock["response_rate"] >= rule.min_clock_response_rate,
-            clock.get("response_rate"),
-            f">= {rule.min_clock_response_rate:.3f}",
-        ),
-        GateResult(
-            "CLOCK_RESIDUAL_P95",
-            bool(clock.get("model_present"))
-            and clock["residual_p95_ms"] <= rule.max_clock_residual_p95_ms,
-            clock.get("residual_p95_ms"),
-            f"<= {rule.max_clock_residual_p95_ms:.3f} ms",
-        ),
-        GateResult(
-            "CLOCK_RESIDUAL_MAX",
-            bool(clock.get("model_present"))
-            and clock["residual_max_ms"] <= rule.max_clock_residual_max_ms,
-            clock.get("residual_max_ms"),
-            f"<= {rule.max_clock_residual_max_ms:.3f} ms",
-        ),
-        GateResult(
-            "CLOCK_SKEW_SANITY",
-            bool(clock.get("model_present"))
-            and abs(clock["skew_ppm"]) < rule.skew_sanity_ppm,
-            clock.get("skew_ppm"),
-            f"abs(skew_ppm) < {rule.skew_sanity_ppm:.1f}",
-        ),
+        *_clock_quality_gates(clock, rule),
         GateResult(
             "PACKET_LOSS",
             transport["packet_loss_percent"] <= rule.max_packet_loss_percent,

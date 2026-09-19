@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 from pathlib import Path
 
@@ -101,11 +102,6 @@ def build_synthetic_session(
         },
         "files": [],
     }
-
-    _write_json(
-        session_dir / "manifest.json",
-        manifest,
-    )
 
     conditions = [
         ("P0", "T001", 1_000),
@@ -326,4 +322,13 @@ def build_synthetic_session(
         },
     )
 
+    for section, pairs in (
+        ("android_evidence", (("imu_file", "imu_sha256"), ("android_metadata_file", "android_metadata_sha256"))),
+        ("clock_evidence", (("clock_model_file", "clock_model_sha256"), ("sync_probes_file", "sync_probes_sha256"))),
+    ):
+        for path_field, hash_field in pairs:
+            manifest[section][hash_field] = hashlib.sha256(
+                (session_dir / manifest[section][path_field]).read_bytes()
+            ).hexdigest().upper()
+    _write_json(session_dir / "manifest.json", manifest)
     return session_dir

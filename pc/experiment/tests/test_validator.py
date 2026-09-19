@@ -2,6 +2,8 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
 from pc.experiment.tests.fixture_builder import (
     build_synthetic_session,
 )
@@ -223,3 +225,77 @@ def test_open_session_is_not_valid_as_finalized_session(
     report = validate_session(session_dir)
 
     assert not report.is_valid
+
+
+@pytest.mark.parametrize("relative_path", [
+    "raw/imu/imu.csv", "raw/imu/meta.txt",
+    "raw/clock/clock_model.json", "raw/clock/sync_probes.csv",
+])
+@pytest.mark.parametrize("tamper", ["missing", "changed"])
+def test_declared_source_evidence_must_exist_and_match_hash(tmp_path, relative_path, tamper):
+    session_dir = build_synthetic_session(tmp_path)
+    path = session_dir / relative_path
+    if tamper == "missing":
+        path.unlink()
+    else:
+        path.write_bytes(path.read_bytes() + b"changed\n")
+    report = validate_session(session_dir)
+    assert not report.is_valid
+    assert any(relative_path in issue.message for issue in report.issues)
+
+
+def test_declared_supplemental_file_must_exist(tmp_path):
+    session_dir = build_synthetic_session(tmp_path)
+    manifest = _read_manifest(session_dir)
+    manifest["files"] = [{"relative_path": "missing.bin", "sha256": "0" * 64, "role": "model"}]
+    _write_manifest(session_dir, manifest)
+    assert not validate_session(session_dir).is_valid
+
+
+def test_source_reference_cannot_escape_through_symlink(tmp_path):
+    session_dir = build_synthetic_session(tmp_path)
+    evidence = session_dir / "raw/imu/imu.csv"
+    outside = tmp_path / "external.csv"
+    evidence.rename(outside)
+    evidence.symlink_to(outside)
+    assert not validate_session(session_dir).is_valid
+
+
+def test_closed_session_cannot_be_only_headers(tmp_path):
+    session_dir = build_synthetic_session(tmp_path)
+    for relative_path in ("raw/trial_events.csv", "raw/cursor_samples.csv", "raw/calibration_events.csv"):
+        path = session_dir / relative_path
+        header, _ = _read_csv(path)
+        _write_csv(path, header, [])
+    assert not validate_session(session_dir).is_valid
+
+
+def test_closed_calibration_only_development_session_is_structurally_valid(tmp_path):
+    session_dir = build_synthetic_session(tmp_path)
+    for relative_path in ("raw/trial_events.csv", "raw/cursor_samples.csv"):
+        path = session_dir / relative_path
+        header, _ = _read_csv(path)
+        _write_csv(path, header, [])
+    manifest = _read_manifest(session_dir)
+    manifest["dataset_role"] = "development"
+    manifest["condition_order"] = ["P2C", "L2C"]
+    _write_manifest(session_dir, manifest)
+    report = validate_session(session_dir)
+    assert report.is_valid, report.issues
+
+
+def test_observed_condition_must_be_declared_in_session_order(tmp_path):
+    session_dir = build_synthetic_session(tmp_path)
+    manifest = _read_manifest(session_dir)
+    manifest["condition_order"] = ["P0"]
+    _write_manifest(session_dir, manifest)
+    assert not validate_session(session_dir).is_valid
+
+
+def test_manifest_itself_cannot_escape_through_symlink(tmp_path):
+    session_dir = build_synthetic_session(tmp_path)
+    manifest = session_dir / "manifest.json"
+    external = tmp_path / "external_manifest.json"
+    manifest.rename(external)
+    manifest.symlink_to(external)
+    assert not validate_session(session_dir).is_valid

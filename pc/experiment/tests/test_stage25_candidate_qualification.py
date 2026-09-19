@@ -36,6 +36,7 @@ EXPECTED_CANDIDATE_FIELDS = (
     "qualification_gates",
     "timing_coverage_diagnostics",
     "causality_result",
+    "causality_evidence",
     "reproducibility_result",
     "acceptance_decision",
     "acceptance_reason",
@@ -98,7 +99,7 @@ def test_report_explicitly_records_required_plan_evidence():
     )
 
 
-def test_evidence_set_is_explicitly_synthetic():
+def test_generated_microfixtures_are_synthetic_and_caller_origin_is_unverified():
     report = _qualify()[
         "qualification_report"
     ]
@@ -108,7 +109,7 @@ def test_evidence_set_is_explicitly_synthetic():
     ]
 
     assert (
-        evidence["dataset_role"]
+        evidence["microfixture_dataset_role"]
         == "synthetic"
     )
 
@@ -116,7 +117,7 @@ def test_evidence_set_is_explicitly_synthetic():
         evidence[
             "real_participant_data_used"
         ]
-        is False
+        is None
     )
 
     assert isinstance(
@@ -127,6 +128,8 @@ def test_evidence_set_is_explicitly_synthetic():
     assert evidence[
         "fixture_id"
     ]
+
+    assert evidence["caller_input_origin"] == "UNVERIFIED"
 
 
 def test_all_plan_candidate_dimensions_are_recorded():
@@ -184,6 +187,7 @@ def test_pass_fail_gates_are_explicit():
         "causality",
         "reproducibility",
         "supervision_available",
+        "microfixtures",
     }
 
     for result in report[
@@ -506,6 +510,7 @@ def test_dimension_alternatives_record_explicit_metrics_and_gate():
                 in {
                     "PASS",
                     "FAIL",
+                    "NOT_IMPLEMENTED",
                 }
             )
 
@@ -547,19 +552,13 @@ def test_resampling_dimension_contains_real_causal_comparison():
         in alternative_ids
     )
 
-    offset_metrics = [
-        alternative[
-            "metrics"
-        ]
-        for alternative in alternatives
-    ]
-
-    assert any(
-        metrics.get(
-            "fixture_offset_ms"
-        ) == 4
-        for metrics in offset_metrics
-    )
+    offset = next(a for a in alternatives if a['alternative_id'] == 'previous-sample-hold')
+    assert offset['metrics']['actual']['source_age_ns'] == 4_000_000
+    assert offset['metrics']['actual']['x'] == 2.0
+    assert offset['qualification_status'] == 'PASS'
+    comparison = next(a for a in alternatives if a['alternative_id'] == 'exact-only-comparison')
+    assert comparison['qualification_status'] == 'NOT_IMPLEMENTED'
+    assert comparison['metrics']['comparison_only'] is True
 
 
 def test_expanded_evidence_does_not_select_or_rank():

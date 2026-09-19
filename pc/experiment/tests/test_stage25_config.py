@@ -215,8 +215,8 @@ def test_config_hash_changes_when_configuration_changes():
     first = _config()
     second = _config()
 
-    second["grid_interval_ns"] = (
-        first["grid_interval_ns"]
+    second["max_source_gap_ns"] = (
+        first["max_source_gap_ns"]
         + 1
     )
 

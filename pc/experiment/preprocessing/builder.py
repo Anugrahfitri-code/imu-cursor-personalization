@@ -518,6 +518,11 @@ def build_stage25_preprocessing(
     pc_receive_ts_ns, experiment condition identifiers,
     and evaluation outcomes do not select or modify a
     preprocessing path.
+
+    This is an in-memory numerical kernel. Source hashes are caller
+    declarations; use build_stage25_from_artifacts for verified files.
+    Initialization samples remain in the raw evidence but are never
+    published as causal model inputs before bias estimation has ended.
     """
     if upstream_clock_quality_passed is not True:
         raise ValueError(
@@ -662,6 +667,11 @@ def build_stage25_preprocessing(
             "grid_pc_times_ns"
         ]
     )
+
+    bias_end = int(normalized_config["bias_correction"]["window_end_pc_ns"])
+    grid_pc_times_ns = [t for t in grid_pc_times_ns if t > bias_end]
+    if not grid_pc_times_ns:
+        raise ValueError("no common-grid output remains after the bias window.")
 
     resampled = resample_sensor_streams(
         accel_stream=streams[

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from pc.experiment.session_hash import (
     generate_session_hashes,
     sha256_file,
@@ -158,3 +160,52 @@ def test_hash_manifest_detects_missing_file(tmp_path):
     )
 
     assert errors
+
+
+@pytest.mark.parametrize("tamper", ["empty", "omitted", "duplicate", "added"])
+def test_hash_verification_requires_exact_file_inventory(tmp_path, tamper):
+    session_dir = build_synthetic_session(tmp_path)
+    manifest = write_session_hash_manifest(session_dir)
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    if tamper == "empty":
+        manifest.write_text("\n", encoding="utf-8")
+    elif tamper == "omitted":
+        manifest.write_text("\n".join(lines[1:]) + "\n", encoding="utf-8")
+    elif tamper == "duplicate":
+        manifest.write_text("\n".join(lines + [lines[0]]) + "\n", encoding="utf-8")
+    else:
+        (session_dir / "new_evidence.txt").write_text("unlisted", encoding="utf-8")
+    assert verify_session_hash_manifest(session_dir)
+
+
+def test_hash_manifest_rejects_external_symlink(tmp_path):
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    external = tmp_path / "external.txt"
+    external.write_text("outside evidence", encoding="utf-8")
+    (session_dir / "linked.txt").symlink_to(external)
+    (session_dir / HASH_MANIFEST_NAME).write_text(
+        f"{sha256_file(external)}  linked.txt\n", encoding="utf-8"
+    )
+    assert verify_session_hash_manifest(session_dir)
+    with pytest.raises(ValueError):
+        generate_session_hashes(session_dir)
+
+
+@pytest.mark.parametrize("path", ["./evidence.txt", "a/../evidence.txt", "C:/evidence.txt", "a\\evidence.txt"])
+def test_hash_manifest_rejects_nonportable_paths(tmp_path, path):
+    (tmp_path / "evidence.txt").write_text("evidence", encoding="utf-8")
+    (tmp_path / HASH_MANIFEST_NAME).write_text(
+        f"{sha256_file(tmp_path / 'evidence.txt')}  {path}\n", encoding="utf-8"
+    )
+    assert verify_session_hash_manifest(tmp_path)
+
+
+def test_hash_manifest_writer_preserves_existing_failed_baseline(tmp_path):
+    session_dir = build_synthetic_session(tmp_path)
+    manifest = write_session_hash_manifest(session_dir)
+    original = manifest.read_bytes()
+    (session_dir / "raw/trial_events.csv").write_text("changed", encoding="utf-8")
+    with pytest.raises(ValueError):
+        write_session_hash_manifest(session_dir)
+    assert manifest.read_bytes() == original

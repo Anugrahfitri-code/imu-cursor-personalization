@@ -67,6 +67,7 @@ public class RecordingService extends Service implements SensorEventListener {
 
     private final IBinder binder = new LocalBinder();
     private final Object stopLock = new Object();
+    private final SensorCallbackGate sensorCallbacks = new SensorCallbackGate();
 
     private Handler mainHandler;
 
@@ -457,8 +458,11 @@ public class RecordingService extends Service implements SensorEventListener {
             );
             networkThread.start();
 
-            recording = true;
-            stopping = false;
+            synchronized (stopLock) {
+                sensorCallbacks.open();
+                recording = true;
+                stopping = false;
+            }
 
             boolean accelRegistered =
                     sensorManager.registerListener(
@@ -543,7 +547,9 @@ public class RecordingService extends Service implements SensorEventListener {
         recording = false;
         stopping = false;
 
+        sensorCallbacks.close();
         sensorManager.unregisterListener(this);
+        sensorCallbacks.awaitIdle();
         writerRunning = false;
         networkRunning = false;
 
@@ -561,12 +567,19 @@ public class RecordingService extends Service implements SensorEventListener {
 
     @Override
     public void onSensorChanged(SensorEvent event) {
-        if (!recording) {
+        long callbackElapsedNs = SystemClock.elapsedRealtimeNanos();
+        if (!sensorCallbacks.tryEnter()) {
             return;
         }
 
-        long callbackElapsedNs =
-                SystemClock.elapsedRealtimeNanos();
+        try {
+            acceptSensorSample(event, callbackElapsedNs);
+        } finally {
+            sensorCallbacks.exit();
+        }
+    }
+
+    private void acceptSensorSample(SensorEvent event, long callbackElapsedNs) {
         long sensorTimestampNs = event.timestamp;
 
         String sensorType;
@@ -803,6 +816,9 @@ public class RecordingService extends Service implements SensorEventListener {
                 return;
             }
 
+            // Close admission atomically with respect to tryEnter(). A callback
+            // already admitted may still be between its two queue offers.
+            sensorCallbacks.close();
             stopping = true;
             recording = false;
             recordingStopElapsedNs =
@@ -812,7 +828,7 @@ public class RecordingService extends Service implements SensorEventListener {
             status = "STOPPING";
             networkStatus = "STOPPING";
 
-            // Stop the source first. No new samples are accepted after this point.
+            // Unregistration does not replace the admitted-callback barrier below.
             sensorManager.unregisterListener(this);
 
             updateForegroundNotification();
@@ -827,6 +843,9 @@ public class RecordingService extends Service implements SensorEventListener {
     }
 
     private void finishStop(String reason) {
+        // Keep both consumers running until every admitted producer has finished.
+        // Do not hold stopLock or block the UI while waiting here.
+        sensorCallbacks.awaitIdle();
         writerRunning = false;
         joinWorker(writerThread, "writer");
 
@@ -1211,9 +1230,11 @@ public class RecordingService extends Service implements SensorEventListener {
             // Best-effort emergency closure. This is not a normal user stop.
             recording = false;
             stopping = false;
+            sensorCallbacks.close();
             recordingStopElapsedNs = SystemClock.elapsedRealtimeNanos();
             recordingStopElapsedMs = recordingStopElapsedNs / 1_000_000L;
             sensorManager.unregisterListener(this);
+            sensorCallbacks.awaitIdle();
             writerRunning = false;
             networkRunning = false;
 

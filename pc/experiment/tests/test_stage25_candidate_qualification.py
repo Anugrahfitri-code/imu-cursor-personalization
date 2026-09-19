@@ -587,4 +587,3 @@ def test_expanded_dimension_evidence_is_deterministic():
     second = _dimension_evidence()
 
     assert first == second
-

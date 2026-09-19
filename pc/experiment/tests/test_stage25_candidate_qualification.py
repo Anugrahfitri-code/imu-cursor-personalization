@@ -21,6 +21,7 @@ EXPECTED_REPORT_FIELDS = (
     "calibration_id",
     "upstream_stage24_provenance_sha256",
     "evidence_set",
+    "dimension_evidence",
     "candidate_count",
     "candidate_results",
 )
@@ -387,3 +388,203 @@ def test_evidence_writer_emits_reproducible_files(
             "qualification_report_sha256"
         ]
     )
+
+
+EXPECTED_DIMENSION_ENTRY_FIELDS = (
+    "fixture_id",
+    "dataset_role",
+    "alternatives",
+)
+
+
+EXPECTED_DIMENSION_ALTERNATIVE_FIELDS = (
+    "alternative_id",
+    "configuration_delta",
+    "metrics",
+    "qualification_status",
+    "qualification_reason",
+)
+
+
+def _dimension_evidence():
+    return _qualify()[
+        "qualification_report"
+    ][
+        "dimension_evidence"
+    ]
+
+
+def test_dimension_evidence_covers_all_required_plan_dimensions():
+    evidence = _dimension_evidence()
+
+    assert (
+        set(evidence.keys())
+        == REQUIRED_COMPARED_DIMENSIONS
+    )
+
+
+def test_every_dimension_compares_at_least_two_alternatives():
+    evidence = _dimension_evidence()
+
+    for dimension, entry in evidence.items():
+        assert tuple(entry.keys()) == (
+            EXPECTED_DIMENSION_ENTRY_FIELDS
+        )
+
+        assert (
+            entry["dataset_role"]
+            == "synthetic"
+        )
+
+        assert isinstance(
+            entry["fixture_id"],
+            str,
+        )
+
+        assert entry[
+            "fixture_id"
+        ].strip()
+
+        alternatives = entry[
+            "alternatives"
+        ]
+
+        assert len(alternatives) >= 2, (
+            dimension
+        )
+
+        alternative_ids = [
+            alternative[
+                "alternative_id"
+            ]
+            for alternative in alternatives
+        ]
+
+        assert (
+            len(alternative_ids)
+            == len(
+                set(alternative_ids)
+            )
+        )
+
+
+def test_dimension_alternatives_record_explicit_metrics_and_gate():
+    evidence = _dimension_evidence()
+
+    for dimension, entry in evidence.items():
+        for alternative in entry[
+            "alternatives"
+        ]:
+            assert tuple(
+                alternative.keys()
+            ) == (
+                EXPECTED_DIMENSION_ALTERNATIVE_FIELDS
+            )
+
+            assert isinstance(
+                alternative[
+                    "configuration_delta"
+                ],
+                dict,
+            )
+
+            assert isinstance(
+                alternative[
+                    "metrics"
+                ],
+                dict,
+            )
+
+            assert alternative[
+                "metrics"
+            ], dimension
+
+            assert (
+                alternative[
+                    "qualification_status"
+                ]
+                in {
+                    "PASS",
+                    "FAIL",
+                }
+            )
+
+            assert isinstance(
+                alternative[
+                    "qualification_reason"
+                ],
+                str,
+            )
+
+            assert alternative[
+                "qualification_reason"
+            ].strip()
+
+
+def test_resampling_dimension_contains_real_causal_comparison():
+    alternatives = (
+        _dimension_evidence()[
+            "causal_resampling"
+        ][
+            "alternatives"
+        ]
+    )
+
+    alternative_ids = {
+        alternative[
+            "alternative_id"
+        ]
+        for alternative in alternatives
+    }
+
+    assert (
+        "previous-sample-hold"
+        in alternative_ids
+    )
+
+    assert (
+        "exact-only-comparison"
+        in alternative_ids
+    )
+
+    offset_metrics = [
+        alternative[
+            "metrics"
+        ]
+        for alternative in alternatives
+    ]
+
+    assert any(
+        metrics.get(
+            "fixture_offset_ms"
+        ) == 4
+        for metrics in offset_metrics
+    )
+
+
+def test_expanded_evidence_does_not_select_or_rank():
+    evidence = _dimension_evidence()
+
+    serialized = json.dumps(
+        evidence,
+        sort_keys=True,
+    ).lower()
+
+    forbidden_tokens = (
+        '"winner"',
+        '"ranking"',
+        '"rank"',
+        '"selected_candidate"',
+        '"selected_configuration"',
+    )
+
+    for token in forbidden_tokens:
+        assert token not in serialized
+
+
+def test_expanded_dimension_evidence_is_deterministic():
+    first = _dimension_evidence()
+    second = _dimension_evidence()
+
+    assert first == second
+

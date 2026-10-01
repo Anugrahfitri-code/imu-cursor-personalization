@@ -11,6 +11,7 @@ from pc.experiment.session_hash import (
 from pc.experiment.tests.fixture_builder import (
     build_synthetic_session,
 )
+from pc.experiment.tests.symlink_capability import can_create_symlinks
 
 
 HASH_MANIFEST_NAME = "SESSION_SHA256SUMS.txt"
@@ -178,6 +179,10 @@ def test_hash_verification_requires_exact_file_inventory(tmp_path, tamper):
     assert verify_session_hash_manifest(session_dir)
 
 
+@pytest.mark.skipif(
+    not can_create_symlinks(),
+    reason="symlink creation is not permitted in this environment",
+)
 def test_hash_manifest_rejects_external_symlink(tmp_path):
     session_dir = tmp_path / "session"
     session_dir.mkdir()

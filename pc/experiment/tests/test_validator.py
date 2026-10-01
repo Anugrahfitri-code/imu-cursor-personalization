@@ -7,6 +7,7 @@ import pytest
 from pc.experiment.tests.fixture_builder import (
     build_synthetic_session,
 )
+from pc.experiment.tests.symlink_capability import can_create_symlinks
 from pc.experiment.validator import validate_session
 
 
@@ -252,6 +253,10 @@ def test_declared_supplemental_file_must_exist(tmp_path):
     assert not validate_session(session_dir).is_valid
 
 
+@pytest.mark.skipif(
+    not can_create_symlinks(),
+    reason="symlink creation is not permitted in this environment",
+)
 def test_source_reference_cannot_escape_through_symlink(tmp_path):
     session_dir = build_synthetic_session(tmp_path)
     evidence = session_dir / "raw/imu/imu.csv"
@@ -292,6 +297,10 @@ def test_observed_condition_must_be_declared_in_session_order(tmp_path):
     assert not validate_session(session_dir).is_valid
 
 
+@pytest.mark.skipif(
+    not can_create_symlinks(),
+    reason="symlink creation is not permitted in this environment",
+)
 def test_manifest_itself_cannot_escape_through_symlink(tmp_path):
     session_dir = build_synthetic_session(tmp_path)
     manifest = session_dir / "manifest.json"

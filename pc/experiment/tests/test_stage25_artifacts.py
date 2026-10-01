@@ -11,6 +11,7 @@ from pc.experiment.calibration.provenance import (
     build_calibration_manifest, calibration_provenance_sha256,
 )
 from pc.experiment.labels.schema import MAPPED_SENSOR_TIME_COLUMNS
+from pc.experiment.tests.symlink_capability import can_create_symlinks
 from pc.experiment.tests.test_stage25_builder import _builder_config, _reference
 
 IDENTITY = dict(participant_id='PTEST001', session_id='STEST001', calibration_id='CAL2C001')
@@ -135,6 +136,10 @@ def test_missing_and_escaping_paths_fail_closed(tmp_path, bad_path):
         _build(tmp_path, config)
 
 
+@pytest.mark.skipif(
+    not can_create_symlinks(),
+    reason='symlink creation is not permitted in this environment',
+)
 def test_symlink_escape_fails_closed(tmp_path):
     root = tmp_path / 'session'
     root.mkdir()

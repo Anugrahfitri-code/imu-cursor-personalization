@@ -66,11 +66,21 @@ class VelocityNet(nn.Module):
         self.latent_projection = nn.Linear(latent_channels, latent_dim)
         self.head = nn.Linear(latent_dim, outputs)
 
-    def forward(self, x):
-        # x: (batch, window, channels) -> (batch, window, outputs)
+    def encode(self, x):
+        """x: (batch, window, channels) -> z: (batch, window, latent_dim)."""
         hidden = self.encoder(x.transpose(1, 2))
-        z = self.latent_projection(hidden.transpose(1, 2))
+        return self.latent_projection(hidden.transpose(1, 2))
+
+    def decode(self, z):
+        """z: (batch, window, latent_dim) -> outputs: (batch, window, outputs)."""
         return self.head(nn.functional.gelu(z))
+
+    def forward(self, x, adapter=None):
+        """optionally adapt the frozen latent before the frozen head"""
+        z = self.encode(x)
+        if adapter is not None:
+            z = adapter(z)
+        return self.decode(z)
 
 
 def build_encoder(config):

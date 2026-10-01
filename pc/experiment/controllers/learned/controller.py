@@ -14,10 +14,13 @@ class LearnedController:
     """
 
     def __init__(self, config, network, *, initial_position=(0., 0.),
-                 viewport=None, condition="L0"):
+                 viewport=None, condition="L0", adapter=None):
         self.config = config
         self.network = network
         self.network.eval()
+        if adapter is not None and condition != "L2C":
+            raise ValueError("the latent adapter is only valid for L2C")
+        self.adapter = adapter
         if condition not in ("L0", "L2C"):
             raise ValueError("condition must be L0 or L2C")
         self.condition = condition
@@ -61,7 +64,7 @@ class LearnedController:
             return self._result(t, "CLOCK_RESET", (0., 0.))
         with torch.no_grad():
             batch = torch.tensor([self._window], dtype=torch.float64).float()
-            velocity = self.network(batch)[0, -1].tolist()
+            velocity = self.network(batch, self.adapter)[0, -1].tolist()
         velocity = self._clamp(velocity)
         dt = expected / 1e9
         self.position = (

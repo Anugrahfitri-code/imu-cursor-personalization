@@ -24,6 +24,10 @@ CAPACITY_LATENT = {"SMALL": 12, "MEDIUM": 24, "LARGE": 48}
 WINDOWS = (32, 48, 64)
 LATENT_DIMS = (16, 32, 64)  # L2C user-specific adaptation dims d.
 
+# Per-user parameter budget of the latent affine adapter: 2 * d (gamma + beta).
+ADAPTER_USER_PARAMETERS = {d: 2 * d for d in LATENT_DIMS}
+MAX_USER_PARAMETERS = max(ADAPTER_USER_PARAMETERS.values())
+
 
 @dataclass(frozen=True)
 class LearnedConfig:

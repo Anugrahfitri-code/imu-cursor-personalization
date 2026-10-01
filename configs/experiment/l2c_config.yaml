@@ -1,0 +1,37 @@
+# L2C personalization policy (latent affine adapter).
+#
+# The global model (encoder + latent projection + head) is frozen. The only
+# per-participant parameters are the latent adapter: z_new = gamma * z + beta.
+# Per-user budget is 2 * d -> 32 / 64 / 128 parameters for d = 16 / 32 / 64.
+#
+# This file is a declaration only. load_l2c_policy() re-derives the parameter
+# counts from the code and fails closed if the two ever disagree.
+
+schema_version: "stage2.9-l2c-latent-adapter-v1"
+status: "DEVELOPMENT_CANDIDATE"
+configuration_id: "l2c-latent-affine-adapter-v1"
+
+adapter:
+  kind: "latent_affine"
+  equation: "z_new = gamma * z + beta"
+  apply_point: "latent"        # after latent_projection, before head
+  trainable: true
+  gamma_init: "ones"           # identity transformation
+  beta_init: "zeros"
+
+frozen_modules:
+  encoder: true
+  latent_projection: true
+  head: true
+
+latent_dims: [16, 32, 64]
+
+optimisation:
+  optimiser: "Adam"
+  learning_rate: 0.01
+  max_steps: 400
+  early_stop_tolerance: 1.0e-10
+
+reporting:
+  record_target_amplitude: true   # keep the Fitts amplitude explicit
+  record_parameter_count: true

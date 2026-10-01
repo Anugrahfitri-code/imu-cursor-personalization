@@ -195,7 +195,10 @@ def test_fit_l2c_freezes_encoder_and_adapts_output(stage25_bundle):
     after = [p.detach().clone() for p in net.parameters()]
     for a, b in zip(before, after):
         assert torch.equal(a, b)
-    assert len(result.gamma) == len(result.beta) == 2
+    # Adaptation is latent, not output-level: gamma/beta span latent_dim.
+    assert len(result.gamma) == len(result.beta) == config.latent_dim
+    assert result.latent_dim == config.latent_dim
+    assert result.user_parameter_count == 2 * config.latent_dim
     assert len(result.dataset_sha256) == 64
     assert 1 <= result.steps <= 25
     assert result.final_loss >= 0

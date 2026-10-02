@@ -56,6 +56,16 @@ qualification:
   # A zero-velocity baseline predicts (0, 0); L0 must beat it.
   zero_velocity_rmse_ratio_max: 0.95
   # Direction agreement is measured only on genuinely moving windows.
+  #
+  # active_speed_threshold_px_s is a DEVELOPMENT PARAMETER, NOT a frozen
+  # constant. It is deliberately distinct from the frozen Stage 2.5
+  # `active_motion_flag` (a sensor-domain gate: GYRO x/y L2 >= 0.1 rad/s,
+  # already present on every grid row). This is an extra REFERENCE-domain
+  # filter on the label speed, so near-stationary windows cannot dominate
+  # MAE/RMSE. The value below is an UNVALIDATED placeholder picked for
+  # synthetic data; calibrate it against the real development cohort
+  # before trusting any QUALIFIED result. See
+  # docs/decisions/l0-qualification-notes.md.
   active_speed_threshold_px_s: 5.0
   min_active_samples: 32
   min_direction_agreement: 0.55

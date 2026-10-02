@@ -450,6 +450,129 @@ def test_grouped_k_fold_rejects_too_few_users():
         validation.grouped_k_fold(["D1"], folds=2)
 
 
+# ---------------------------------------------------------------------
+# Label alignment audit
+#
+# L0 trains X[t-T+1:t] -> Y(t-tau). tau is compensated UPSTREAM by the
+# frozen Stage 2.5 grid, so L0 must NOT subtract a lag again. These tests
+# pin the convention so a future "helpful" re-shifting gets caught.
+# ---------------------------------------------------------------------
+
+
+def test_l0_does_not_apply_its_own_label_lag():
+    """The label must be ref_vx at the row as-is, not re-indexed by tau."""
+    rows = _user_rows("D1", length=40, speed=100.0, seed=3)
+    lagged = []
+    for r in rows:
+        r = dict(r)
+        # Pretend Stage 2.5 already compensated a 5-tick supervision lag.
+        r["grid_label_pc_time_ns"] = r["grid_pc_time_ns"] - 5 * GRID_INTERVAL_NS
+        lagged.append(r)
+
+    built = build_l0_datasets(lagged, 8, GRID_INTERVAL_NS, ["D1"])
+    X, y, active = built["D1"]
+    plain = build_l0_datasets(rows, 8, GRID_INTERVAL_NS, ["D1"])
+
+    # Identical features AND identical targets: no extra shift anywhere.
+    assert np.array_equal(X, plain["D1"][0])
+    assert np.array_equal(y, plain["D1"][1])
+    assert np.array_equal(active, plain["D1"][2])
+
+
+def test_target_is_the_label_at_its_own_row():
+    """y[i] must equal ref_vx of the same grid row the window ends on."""
+    rows = _user_rows("D1", length=30, speed=120.0, seed=5)
+    rows = [dict(r, ref_vx_px_s=float(i), ref_vy_px_s=0.0)
+            for i, r in enumerate(rows)]
+    X, y, active = build_l0_datasets(rows, 8, GRID_INTERVAL_NS, ["D1"])["D1"]
+
+    last_index = len(rows) - 1
+    assert y[-1][0] == float(last_index)
+    # Causal: the last window exists and does not read past the final row.
+    assert X.shape[0] == len(rows)
+    assert X[-1].shape[0] == 8
+    assert y[-1][0] == float(last_index)
+
+
+def test_stage25_grid_compensates_the_lag_upstream():
+    """Direct check of the frozen convention L0 relies on."""
+    from pc.experiment.preprocessing.labels import (
+        attach_common_grid_reference_labels)
+
+    lag = 5
+    reference = [{
+        "reference_sample_id": f"R{i}", "participant_id": "P1",
+        "session_id": "S1", "calibration_id": "C1", "cycle_index": 0,
+        "sequence_id": "Q1", "segment_index": 0, "direction_code": "RIGHT",
+        "phase": "OUTBOUND", "pc_time_ns": i, "relative_time_ns": i,
+        "ref_x_px": 0.0, "ref_y_px": 0.0,
+        "ref_vx_px_s": float(i), "ref_vy_px_s": 0.0,
+        "speed_profile_code": "PROBE", "pause_flag": 0,
+        "trajectory_version": "probe",
+    } for i in range(40)]
+    grid = [{
+        "participant_id": "P1", "session_id": "S1", "calibration_id": "C1",
+        "grid_index": i, "grid_pc_time_ns": i, "sensor_status": "VALID",
+        "accel_status": "VALID", "gyro_status": "VALID",
+    } for i in range(5, 30)]
+
+    out = attach_common_grid_reference_labels(
+        common_grid_rows=grid, reference_trajectory=reference,
+        alignment_lag_ns=lag)
+    row = out[3]
+
+    # Label time is t - tau, and the velocity is read AT that label time.
+    assert row["grid_label_pc_time_ns"] == row["grid_pc_time_ns"] - lag
+    t = row["grid_pc_time_ns"]
+    assert row["ref_vx_px_s"] == float(t - lag)
+    assert row["ref_vx_px_s"] != float(t)
+
+
+# ---------------------------------------------------------------------
+# active_speed_threshold audit
+# ---------------------------------------------------------------------
+
+
+def test_active_speed_threshold_is_a_development_parameter(l0_config, tmp_path):
+    """Configurable, positive, and NOT silently pinned to 5.0."""
+    default = l0_config.qualification.active_speed_threshold_px_s
+    assert default > 0.0
+
+    def _load_with(value):
+        raw = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+        raw["qualification"]["active_speed_threshold_px_s"] = value
+        path = tmp_path / f"cfg_{str(value).replace('.', '_')}.yaml"
+        path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+        return load_l0_config(path)
+
+    # The loader must accept an override, proving it is a knob not a constant.
+    assert _load_with(42.0).qualification.active_speed_threshold_px_s == 42.0
+    assert _load_with(0.25).qualification.active_speed_threshold_px_s == 0.25
+
+    # And it must reject a nonsensical value.
+    for bad in (-1.0, 0.0):
+        with pytest.raises(ValueError):
+            _load_with(bad)
+
+
+def test_active_speed_threshold_actually_filters():
+    """The threshold must change which samples count as active."""
+    from pc.experiment.training.metrics import active_mask
+
+    y = np.array([[100.0, 0.0], [3.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    sensor_flag = np.array([True, True, True])
+
+    strict = active_mask(y, sensor_flag, 5.0)
+    loose = active_mask(y, sensor_flag, 0.5)
+    assert strict.sum() == 1
+    assert loose.sum() == 3
+
+    # The frozen Stage 2.5 sensor flag is an AND, not a replacement:
+    # a sensor-inactive sample is never active regardless of label speed.
+    with_flag = active_mask(y, np.array([True, False, True]), 0.5)
+    assert with_flag.sum() == 2
+
+
 def test_nested_validation_keeps_outer_user_out(l0_config):
     """The outer validation user must never appear in any inner training set."""
     payload = _dev_config(l0_config, users=("D1", "D2", "D3"), epochs=1)

@@ -186,10 +186,13 @@ def _qualification(raw):
                    "zero_velocity_rmse_ratio_max")
     if not 0.0 < ratio <= 1.0:
         raise ValueError("zero_velocity_rmse_ratio_max must be within (0, 1]")
+    active_speed = finite(
+        qual["active_speed_threshold_px_s"], "active_speed_threshold_px_s")
+    if active_speed <= 0.0:
+        raise ValueError("active_speed_threshold_px_s must be > 0")
     return QualificationConfig(
         zero_velocity_rmse_ratio_max=ratio,
-        active_speed_threshold_px_s=finite(
-            qual["active_speed_threshold_px_s"], "active_speed_threshold_px_s"),
+        active_speed_threshold_px_s=active_speed,
         min_active_samples=_positive_int(
             qual["min_active_samples"], "min_active_samples"),
         min_direction_agreement=agreement,

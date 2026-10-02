@@ -50,9 +50,12 @@ def _validity(
     """
     Resolve validity, rule, and exclusion reason for one trial.
 
-    Initial acquisition is excluded from the movement denominator.
-    Invalid timestamps are excluded. Misses are recorded but do not
-    enter the movement-time denominator.
+    Single definition of miss handling for the whole pipeline:
+
+    * hit                -> in MT, in throughput, error=0
+    * valid miss         -> in MT, in throughput, error=1
+    * technical failure  -> not in throughput
+    * initial acquisition-> stored for audit, not in the denominator
     """
     if trial_role == "INITIAL_ACQUISITION":
         return False, "NOT_IN_DENOMINATOR", "INITIAL_ACQUISITION"
@@ -61,7 +64,11 @@ def _validity(
         return False, "INVALID", "INVALID_TIMESTAMP"
 
     if outcome in MISS_OUTCOMES:
-        return False, "MEASURED_MISS", "MISS_NOT_SELECTED"
+        # A valid miss is a real observation: it has a real endpoint and
+        # a real movement time, so it enters the MT and throughput
+        # aggregates and is flagged error=1. Dropping it would delete
+        # the slowest, most errorful movements and inflate throughput.
+        return True, "MEASURED_MISS", ""
 
     if outcome in HIT_OUTCOMES:
         return True, "MEASURED_HIT", ""
@@ -209,6 +216,9 @@ def build_sequence_trials(
                 "valid_trial": valid,
                 "validity_rule": rule,
                 "hit": bool(result["hit"]),
+                # A valid miss is an error but is NOT excluded: it keeps
+                # its endpoint and its movement time in the aggregate.
+                "error": int(outcome in MISS_OUTCOMES),
                 "excluded_reason": excluded,
                 "task_config_sha256": config_sha,
                 "task_schema_version": TASK_SCHEMA_VERSION,

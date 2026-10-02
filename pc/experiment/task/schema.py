@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-TASK_SCHEMA_VERSION = "1.0"
+TASK_SCHEMA_VERSION = "1.1"
 
 
 TASK_ID = "fitts_pointing"
@@ -49,6 +49,7 @@ TRIAL_COLUMNS = (
     "valid_trial",
     "validity_rule",
     "hit",
+    "error",
     "excluded_reason",
     "task_config_sha256",
     "task_schema_version",
@@ -116,11 +117,12 @@ OUTCOME_PRECEDENCE = (
 )
 
 
-#: Reason codes attached to ``excluded_reason``.
+#: Reason codes attached to ``excluded_reason``. A valid miss is
+#: deliberately absent: it enters the denominator and is flagged
+#: ``error=1`` instead of being excluded.
 EXCLUSION_REASONS = (
     "INITIAL_ACQUISITION",
     "INVALID_TIMESTAMP",
-    "MISS_NOT_SELECTED",
 )
 
 

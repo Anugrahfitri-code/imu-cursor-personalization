@@ -1,0 +1,71 @@
+# L0 global supervised training policy.
+#
+# L0 is a GLOBAL model fitted on DEVELOPMENT users only. It is never
+# an evaluation model: the evaluation users below must not contribute
+# to the scaler, to hyperparameter selection, to window selection, or
+# to qualification thresholds.
+#
+# The development/evaluation roster is MANDATORY and explicit. With an
+# empty roster load_l0_config() fails closed rather than silently
+# training on every participant.
+
+schema_version: "1.0"
+configuration_id: "l0_supervised_v1"
+status: "engineering_candidate"
+
+# Window candidates evaluated by the INNER grouped folds only.
+# The outer validation user never selects the window.
+window_candidates: [32, 48, 64]
+
+# Architecture is fixed by proposal and must not be searched.
+# 4 blocks, kernel 5, dilations 1/2/4/8, LayerNorm -> GELU -> Dropout.
+architecture:
+  blocks: 4
+  kernel_size: 5
+  dilations: [1, 2, 4, 8]
+  dropout: 0.10
+  latent_dim: 64
+  head_dim: 2          # (vx_ref, vy_ref)
+
+optimisation:
+  optimiser: "Adam"
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  epochs: 40
+  batch_size: 64
+  loss: "mse"
+  grad_clip_norm: 1.0
+
+validation:
+  strategy: "leave_one_user_out_outer_grouped_kfold_inner"
+  outer: "leave_one_user_out"
+  inner: "grouped_kfold"
+  inner_folds: 4
+  # The scaler is fit from inner TRAINING users only.
+  scaler_fit_scope: "inner_training_users"
+
+seed: 20260215
+deterministic: true
+
+normalisation:
+  # Standardisation over the 6 IMU channels, per channel.
+  # Statistics come from inner training users only.
+  method: "standard"
+
+qualification:
+  # A zero-velocity baseline predicts (0, 0); L0 must beat it.
+  zero_velocity_rmse_ratio_max: 0.95
+  # Direction agreement is measured only on genuinely moving windows.
+  active_speed_threshold_px_s: 5.0
+  min_active_samples: 32
+  min_direction_agreement: 0.55
+  max_mean_latency_ms: 5.0
+  latency_warmup_runs: 10
+  latency_measured_runs: 100
+
+# MANDATORY participant roster.
+# Replace these placeholders with the real development cohort before
+# any evaluation. Values are participant_id strings as they appear in
+# the common grid (COMMON_GRID_COLUMNS.participant_id).
+development_users: []
+evaluation_users: []

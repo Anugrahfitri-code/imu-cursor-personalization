@@ -12,22 +12,48 @@ visits one more position than the number of transitions it makes, so
 it never revisits its starting target. That invariant is correct for a
 walk and is left untouched.
 
-A *reciprocal* task differs in one decisive respect: it must be able to
-**return to its anchor target**, which is what makes the sequence
-close on itself and makes the task "reciprocal" in the Fitts sense of
-alternating between repeated locations. For a ring of ``N`` unique
-targets this requires exactly ``N`` measured transitions:
+A *reciprocal* task differs in two decisive respects.
 
-    initial acquisition:  center -> target_0
-    measured:             target_0 -> target_1
-                          ...
-                          target_8 -> target_0   (closing transition)
+1. It must be able to **return to its anchor target**, which is what
+   makes the sequence close on itself and makes the task "reciprocal"
+   in the Fitts sense of alternating between repeated locations. For a
+   ring of ``N`` unique targets this requires exactly ``N`` measured
+   transitions:
 
-So ``target_count == measured_transitions`` for this layout, *not*
-``measured_transitions + 1``. Because ``N`` must be odd, both the
-anchor and the closing transition behave symmetrically around the
-reference axis. :func:`generate_reciprocal_sequence` therefore
-validates against its own invariant and never reuses the frozen one.
+       initial acquisition:  center -> target_0
+       measured:             target_0 -> target_4
+                             target_4 -> target_8
+                             ...
+                             target_5 -> target_0   (closing transition)
+
+   So ``target_count == measured_transitions`` for this layout, *not*
+   ``measured_transitions + 1``. :func:`generate_reciprocal_sequence`
+   therefore validates against its own invariant and never reuses the
+   frozen one.
+
+2. Every measured movement must **span the ring**, not step to the
+   neighbouring vertex. A reciprocal pointing task manipulates a
+   long effective width ``We``; if consecutive movements were between
+   angular neighbours the index of difficulty would be near zero and the
+   throughput would say more about layout geometry than about the
+   participant. Because ``N`` is odd there is no exactly-opposite
+   vertex, so the walk uses the fixed stride ``(N - 1) / 2``, which
+   covers every vertex exactly once and returns to the anchor. Each
+   measured amplitude is then the near-opposite chord
+   ``2 * radius * cos(pi / (2 * N))`` rather than the adjacent chord
+   ``2 * radius * sin(pi / N)``.
+
+   For ``N = 9`` the traversal is::
+
+       0 -> 4 -> 8 -> 3 -> 7 -> 2 -> 6 -> 1 -> 5 -> 0
+
+   ``gcd((N - 1) / 2, N) == 1`` for every odd ``N``, so the stride is a
+   single cycle: no vertex is revisited before the anchor and the
+   sequence always closes. :func:`generate_reciprocal_sequence`
+   computes the order from the stride and
+   :func:`~pc.experiment.task.targets.generate_circular_targets`
+   assigns target ids in ascending angular order, so the geometry above
+   follows from the coordinates and not from the numbering alone.
 
 Movement origin after a miss
 ----------------------------
@@ -87,6 +113,27 @@ def _label(target_id: int) -> str:
     return f"T{target_id}"
 
 
+def reciprocal_traversal(target_count: int) -> list[int]:
+    """Return the near-opposite vertex order for a ring of ``target_count``.
+
+    The walk uses the fixed stride ``(N - 1) // 2`` and returns ``N + 1``
+    entries: the first is the anchor, the last repeats it so the caller
+    can emit a closing transition.
+
+    For ``N = 9`` this is ``[0, 4, 8, 3, 7, 2, 6, 1, 5, 0]``. Every
+    consecutive pair spans the near-opposite chord, and
+    ``gcd((N - 1) // 2, N) == 1`` for odd ``N``, so the order is a single
+    cycle that visits each vertex exactly once before closing.
+
+    Raises ``ValueError`` for an even count, which has no single-cycle
+    near-opposite stride, and for counts below three.
+    """
+    count = validate_target_count(int(target_count))
+    stride = (count - 1) // 2
+
+    return [(index * stride) % count for index in range(count + 1)]
+
+
 def generate_reciprocal_sequence(
     targets: list[Target],
     *,
@@ -97,8 +144,14 @@ def generate_reciprocal_sequence(
 
     The sequence is one initial acquisition from the layout centre to
     ``targets[0]``, followed by ``measured_transitions`` measured
-    transitions that walk the ring in ascending target id and close by
-    returning to ``targets[0]``.
+    transitions that walk the ring with the fixed stride
+    ``(len(targets) - 1) // 2`` and close by returning to
+    ``targets[0]``.
+
+    Every measured transition therefore spans the ring along the
+    near-opposite chord ``2 * radius * cos(pi / (2 * N))``. The stride
+    is coprime with every odd ``N``, so the order visits each vertex
+    exactly once before returning to the anchor.
 
     Parameters
     ----------
@@ -156,19 +209,26 @@ def generate_reciprocal_sequence(
     if not str(sequence_id):
         raise ValueError("sequence_id must be a non-empty string.")
 
+    order = reciprocal_traversal(count)
+
+    if order[-1] != order[0]:
+        raise ValueError(
+            "the traversal must close on its anchor; got order "
+            f"{order}."
+        )
+
     steps = [
         SequenceStep(
             sequence_id=sequence_id,
             from_target=CENTER_LABEL,
-            to_target=_label(0),
+            to_target=_label(order[0]),
             trial_index=0,
             trial_role=INITIAL_ACQUISITION,
         )
     ]
 
-    for offset in range(transitions):
-        source = offset % count
-        destination = (offset + 1) % count
+    for offset, destination in enumerate(order[1:]):
+        source = order[offset]
 
         steps.append(
             SequenceStep(
@@ -181,3 +241,23 @@ def generate_reciprocal_sequence(
         )
 
     return steps
+
+
+def expected_measured_pairs(
+    targets: list[Target],
+) -> tuple[tuple[str, str], ...]:
+    """Return the measured ``(from, to)`` pairs of the planned traversal.
+
+    This is the *trusted* expectation: it is rebuilt from the generator and
+    the target layout, never from a record set. Callers hand it to
+    :func:`pc.experiment.task.throughput.audit_sequence` so a block that
+    chains and closes but visits a different set of targets in a different
+    order is rejected instead of being pooled.
+    """
+    plan = generate_reciprocal_sequence(targets)
+
+    return tuple(
+        (step.from_target, step.to_target)
+        for step in plan
+        if step.trial_role == MEASURED
+    )

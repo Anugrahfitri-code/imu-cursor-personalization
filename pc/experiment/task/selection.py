@@ -54,7 +54,9 @@ IN_DENOMINATOR = "IN_DENOMINATOR"
 EXCLUDED_INITIAL_ACQUISITION = "EXCLUDED_INITIAL_ACQUISITION"
 
 
-#: Applied when the movement time is not positive or not finite.
+#: Applied when the movement duration is not positive or not finite. The name
+#: says "timestamp" for schema stability only: the field it describes is a
+#: duration, not a clock reading.
 EXCLUDED_INVALID_TIMESTAMP = "EXCLUDED_INVALID_TIMESTAMP"
 
 
@@ -73,8 +75,12 @@ class SelectionRecord:
         Real observed positions in pixels. ``cursor_start`` equals the
         previous trial's ``cursor_end`` within a sequence.
     selection_time_ms:
-        Movement time for this trial in milliseconds. May be absent or
-        non-finite for an invalid timestamp.
+        Duration of the movement in milliseconds -- an elapsed interval
+        measured from trial onset to selection, not a clock reading and not
+        an absolute timestamp. May be absent or non-finite when the run
+        failed before a duration could be measured; the constant name
+        :data:`EXCLUDED_INVALID_TIMESTAMP` is retained for schema
+        compatibility with already-written exports.
     hit, miss:
         Outcome of the selection against ``to_target``.
     endpoint_x, endpoint_y:

@@ -1,0 +1,13 @@
+{
+  "effective_width_px": 41.96798699538068,
+  "endpoint_offset_sd_px": 10.15436414115187,
+  "index_of_difficulty_bits": 3.7253034007345933,
+  "mean_effective_amplitude_px": 513.1000315663482,
+  "mean_movement_time_ms": 820.0,
+  "measured_count": 9,
+  "miss_count": 0,
+  "platform": "win32",
+  "python": "3.13.0",
+  "sequence_id": "s1",
+  "throughput_bits_per_second": 4.543052927725114
+}

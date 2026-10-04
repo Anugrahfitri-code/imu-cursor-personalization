@@ -1,0 +1,441 @@
+{
+  "guards": {
+    "baseline_with_plan": {
+      "audit": {
+        "status": "COMPLETE",
+        "expected_measured_transitions": 9,
+        "observed_measured_count": 9,
+        "observed_trial_indices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "duplicated_trial_indices": [],
+        "surplus_trial_indices": [],
+        "foreign_sequence_ids": [],
+        "mismatched_plan_positions": [],
+        "reasons": []
+      },
+      "accepted": true,
+      "tp": 4.543052927725114
+    },
+    "extra_zero_without_plan": {
+      "audit": {
+        "status": "SURPLUS_TRIALS",
+        "expected_measured_transitions": 9,
+        "observed_measured_count": 10,
+        "observed_trial_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "duplicated_trial_indices": [],
+        "surplus_trial_indices": [
+          0
+        ],
+        "foreign_sequence_ids": [],
+        "mismatched_plan_positions": [],
+        "reasons": [
+          "measured trial indices fall outside the exact range 1..9: [0]; the block is not the whole sequence."
+        ]
+      },
+      "accepted": false,
+      "error": "sequence 's1' is incomplete (status SURPLUS_TRIALS): measured trial indices fall outside the exact range 1..9: [0]; the block is not the whole sequence. It must be recorded as incomplete and handled by the frozen missing/repeat rule rather than pooled."
+    },
+    "extra_zero_with_plan": {
+      "audit": {
+        "status": "SURPLUS_TRIALS",
+        "expected_measured_transitions": 9,
+        "observed_measured_count": 10,
+        "observed_trial_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "duplicated_trial_indices": [],
+        "surplus_trial_indices": [
+          0
+        ],
+        "foreign_sequence_ids": [],
+        "mismatched_plan_positions": [
+          1
+        ],
+        "reasons": [
+          "measured trial indices fall outside the exact range 1..9: [0]; the block is not the whole sequence.",
+          "the logged target pairs do not match the configured reciprocal plan; the first differing measured movement is position 1 of 10. The block is a different traversal of the targets and must not be pooled."
+        ]
+      },
+      "accepted": false,
+      "error": "sequence 's1' is incomplete (status SURPLUS_TRIALS): measured trial indices fall outside the exact range 1..9: [0]; the block is not the whole sequence. the logged target pairs do not match the configured reciprocal plan; the first differing measured movement is position 1 of 10. The block is a different traversal of the targets and must not be pooled. It must be recorded as incomplete and handled by the frozen missing/repeat rule rather than pooled."
+    },
+    "extra_zero_after_csv": {
+      "audit": {
+        "status": "SURPLUS_TRIALS",
+        "expected_measured_transitions": 9,
+        "observed_measured_count": 10,
+        "observed_trial_indices": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "duplicated_trial_indices": [],
+        "surplus_trial_indices": [
+          0
+        ],
+        "foreign_sequence_ids": [],
+        "mismatched_plan_positions": [
+          1
+        ],
+        "reasons": [
+          "measured trial indices fall outside the exact range 1..9: [0]; the block is not the whole sequence.",
+          "the logged target pairs do not match the configured reciprocal plan; the first differing measured movement is position 1 of 10. The block is a different traversal of the targets and must not be pooled."
+        ]
+      },
+      "accepted": false,
+      "error": "sequence 's1' is incomplete (status SURPLUS_TRIALS): measured trial indices fall outside the exact range 1..9: [0]; the block is not the whole sequence. the logged target pairs do not match the configured reciprocal plan; the first differing measured movement is position 1 of 10. The block is a different traversal of the targets and must not be pooled. It must be recorded as incomplete and handled by the frozen missing/repeat rule rather than pooled."
+    },
+    "wrong_traversal_without_plan": {
+      "audit": {
+        "status": "COMPLETE",
+        "expected_measured_transitions": 9,
+        "observed_measured_count": 9,
+        "observed_trial_indices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "duplicated_trial_indices": [],
+        "surplus_trial_indices": [],
+        "foreign_sequence_ids": [],
+        "mismatched_plan_positions": [],
+        "reasons": []
+      },
+      "accepted": true,
+      "tp": 2.9213410035109972
+    },
+    "wrong_traversal_with_plan": {
+      "audit": {
+        "status": "PLAN_MISMATCH",
+        "expected_measured_transitions": 9,
+        "observed_measured_count": 9,
+        "observed_trial_indices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "duplicated_trial_indices": [],
+        "surplus_trial_indices": [],
+        "foreign_sequence_ids": [],
+        "mismatched_plan_positions": [
+          1
+        ],
+        "reasons": [
+          "the logged target pairs do not match the configured reciprocal plan; the first differing measured movement is position 1 of 9. The block is a different traversal of the targets and must not be pooled."
+        ]
+      },
+      "accepted": false,
+      "error": "sequence 's1' is incomplete (status PLAN_MISMATCH): the logged target pairs do not match the configured reciprocal plan; the first differing measured movement is position 1 of 9. The block is a different traversal of the targets and must not be pooled. It must be recorded as incomplete and handled by the frozen missing/repeat rule rather than pooled."
+    },
+    "wrong_traversal_after_csv": {
+      "audit": {
+        "status": "PLAN_MISMATCH",
+        "expected_measured_transitions": 9,
+        "observed_measured_count": 9,
+        "observed_trial_indices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "duplicated_trial_indices": [],
+        "surplus_trial_indices": [],
+        "foreign_sequence_ids": [],
+        "mismatched_plan_positions": [
+          1
+        ],
+        "reasons": [
+          "the logged target pairs do not match the configured reciprocal plan; the first differing measured movement is position 1 of 9. The block is a different traversal of the targets and must not be pooled."
+        ]
+      },
+      "accepted": false,
+      "error": "sequence 's1' is incomplete (status PLAN_MISMATCH): the logged target pairs do not match the configured reciprocal plan; the first differing measured movement is position 1 of 9. The block is a different traversal of the targets and must not be pooled. It must be recorded as incomplete and handled by the frozen missing/repeat rule rather than pooled."
+    },
+    "trusted_pairs": [
+      [
+        "T0",
+        "T4"
+      ],
+      [
+        "T4",
+        "T8"
+      ],
+      [
+        "T8",
+        "T3"
+      ],
+      [
+        "T3",
+        "T7"
+      ],
+      [
+        "T7",
+        "T2"
+      ],
+      [
+        "T2",
+        "T6"
+      ],
+      [
+        "T6",
+        "T1"
+      ],
+      [
+        "T1",
+        "T5"
+      ],
+      [
+        "T5",
+        "T0"
+      ]
+    ]
+  },
+  "projection": {
+    "reported": [
+      517.7145657026941,
+      499.97941680792,
+      507.9443348753455,
+      523.5572651534214,
+      509.9191094287059,
+      525.4015684624186,
+      522.0144987404944,
+      509.52218322084684,
+      504.85880204949177
+    ],
+    "actual_from_cursor_start": [
+      517.7145657026941,
+      499.97941680792,
+      507.9443348753455,
+      523.5572651534214,
+      509.9191094287059,
+      525.4015684624186,
+      522.0144987404944,
+      509.52218322084684,
+      504.85880204949177
+    ],
+    "first_error_px": 0.0,
+    "reported_mean": 513.4346382712598,
+    "actual_mean": 513.4346382712598,
+    "turning_angle_count": 8
+  },
+  "C2": {
+    "raw_records": 10,
+    "denominator_records": 0,
+    "audit": {
+      "status": "TRUNCATED_HEAD",
+      "expected_measured_transitions": 9,
+      "observed_measured_count": 0,
+      "observed_trial_indices": [],
+      "duplicated_trial_indices": [],
+      "surplus_trial_indices": [],
+      "foreign_sequence_ids": [],
+      "mismatched_plan_positions": [
+        1
+      ],
+      "reasons": [
+        "the logged target pairs do not match the configured reciprocal plan; the first differing measured movement is position 1 of 0. The block is a different traversal of the targets and must not be pooled.",
+        "the first measured transition is absent; the sequence was truncated before it started.",
+        "the last measured transition(s) [9] are absent; the sequence stopped early.",
+        "the caller reported a technical failure before the sequence was complete."
+      ]
+    },
+    "all_endpoints_finite": true,
+    "tp_rejected": true,
+    "error": "no measured movement survived denominator selection; an index of performance cannot be computed."
+  },
+  "raw_csv_reference": {
+    "expected": {
+      "mean_effective_amplitude_px": 513.1000315663482,
+      "endpoint_offset_sd_px": 10.154364141151893,
+      "effective_width_px": 41.96798699538078,
+      "index_of_difficulty_bits": 3.72530340073459,
+      "mean_movement_time_ms": 820.0,
+      "throughput_bits_per_second": 4.54305292772511
+    },
+    "library": {
+      "mean_effective_amplitude_px": 513.1000315663482,
+      "endpoint_offset_sd_px": 10.15436414115187,
+      "effective_width_px": 41.96798699538068,
+      "index_of_difficulty_bits": 3.7253034007345933,
+      "mean_movement_time_ms": 820.0,
+      "throughput_bits_per_second": 4.543052927725114
+    },
+    "all_terms_match": true,
+    "terms": [
+      {
+        "trial_index": 1,
+        "a": 512.1000315663482,
+        "dx": 2.0000000000000266,
+        "previous_dx": 0.0,
+        "ae": 514.1000315663482,
+        "mt": 820.0
+      },
+      {
+        "trial_index": 2,
+        "a": 512.1000315663483,
+        "dx": -13.999999999999984,
+        "previous_dx": 2.0000000000000266,
+        "ae": 500.1000315663483,
+        "mt": 820.0
+      },
+      {
+        "trial_index": 3,
+        "a": 512.1000315663482,
+        "dx": 8.999999999999979,
+        "previous_dx": -13.999999999999984,
+        "ae": 507.1000315663482,
+        "mt": 820.0
+      },
+      {
+        "trial_index": 4,
+        "a": 512.1000315663481,
+        "dx": 3.0000000000001257,
+        "previous_dx": 8.999999999999979,
+        "ae": 524.1000315663482,
+        "mt": 820.0
+      },
+      {
+        "trial_index": 5,
+        "a": 512.1000315663482,
+        "dx": -4.999999999999981,
+        "previous_dx": 3.0000000000001257,
+        "ae": 510.1000315663483,
+        "mt": 820.0
+      },
+      {
+        "trial_index": 6,
+        "a": 512.1000315663482,
+        "dx": 18.00000000000001,
+        "previous_dx": -4.999999999999981,
+        "ae": 525.1000315663482,
+        "mt": 820.0
+      },
+      {
+        "trial_index": 7,
+        "a": 512.1000315663483,
+        "dx": -7.000000000000063,
+        "previous_dx": 18.00000000000001,
+        "ae": 523.1000315663483,
+        "mt": 820.0
+      },
+      {
+        "trial_index": 8,
+        "a": 512.1000315663483,
+        "dx": 3.9999999999999956,
+        "previous_dx": -7.000000000000063,
+        "ae": 509.10003156634826,
+        "mt": 820.0
+      },
+      {
+        "trial_index": 9,
+        "a": 512.1000315663482,
+        "dx": -11.00000000000006,
+        "previous_dx": 3.9999999999999956,
+        "ae": 505.10003156634815,
+        "mt": 820.0
+      }
+    ]
+  },
+  "package_evidence": {
+    "claimed_tests": {
+      "test_extra_measured_row_with_index_zero_is_not_complete": {
+        "in_source": true,
+        "in_log": true
+      },
+      "test_continuous_but_unplanned_ring_walk_is_refused": {
+        "in_source": true,
+        "in_log": true
+      }
+    },
+    "throughput_calls": [
+      {
+        "file": "code\\repro\\_repro_endpoint.py",
+        "line": 180,
+        "passes_expected_pairs": false
+      },
+      {
+        "file": "code\\repro\\_repro_endpoint.py",
+        "line": 215,
+        "passes_expected_pairs": false
+      },
+      {
+        "file": "code\\repro\\_repro_endpoint.py",
+        "line": 272,
+        "passes_expected_pairs": false
+      },
+      {
+        "file": "code\\repro\\_repro_endpoint.py",
+        "line": 310,
+        "passes_expected_pairs": false
+      },
+      {
+        "file": "code\\repro\\_repro_export_evidence.py",
+        "line": 75,
+        "passes_expected_pairs": false
+      },
+      {
+        "file": "code\\repro\\_repro_numeric_check.py",
+        "line": 203,
+        "passes_expected_pairs": false
+      },
+      {
+        "file": "code\\pc\\experiment\\tests\\verify_fitts_28.py",
+        "line": 160,
+        "passes_expected_pairs": true
+      }
+    ]
+  }
+}
